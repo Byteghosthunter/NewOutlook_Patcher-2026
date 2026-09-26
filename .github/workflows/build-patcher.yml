@@ -1,0 +1,147 @@
+name: Build NewOutlookPatcher NOAB PR19 DirectJS
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "NOP/**"
+      - "NOP.sln"
+      - ".github/workflows/build-patcher.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build-x64:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Setup NuGet
+        uses: NuGet/setup-nuget@v2
+
+      - name: Restore packages
+        shell: pwsh
+        run: |
+          nuget restore "$env:GITHUB_WORKSPACE\NOP.sln"
+          if ($LASTEXITCODE -ne 0) { throw "NuGet restore failed." }
+
+      - name: Build official MinHook 1.3.4 x64 static
+        shell: pwsh
+        run: |
+          $root = "$env:GITHUB_WORKSPACE"
+          $src = "$root\_minhook-src"
+          $build = "$root\_minhook-build"
+
+          git clone --depth 1 --branch v1.3.4 https://github.com/TsudaKageyu/minhook.git $src
+          if ($LASTEXITCODE -ne 0) { throw "MinHook clone failed." }
+
+          cmake -S $src -B $build -A x64 -DBUILD_SHARED_LIBS=OFF
+          if ($LASTEXITCODE -ne 0) { throw "MinHook configure failed." }
+
+          cmake --build $build --config Release --parallel
+          if ($LASTEXITCODE -ne 0) { throw "MinHook build failed." }
+
+          $lib = Get-ChildItem $build -Recurse -File |
+            Where-Object { $_.Name -ieq "minhook.x64.lib" -or $_.Name -ieq "libMinHook.x64.lib" } |
+            Select-Object -First 1
+
+          if (-not $lib) { throw "MinHook x64 static library was not found." }
+          if (-not (Test-Path "$src\include\MinHook.h")) { throw "Official MinHook.h was not found." }
+
+          Copy-Item "$src\include\MinHook.h" "$root\NOP\worker\MinHook.h" -Force
+          Copy-Item $lib.FullName "$root\NOP\worker\libMinHook.x64.lib" -Force
+
+          Get-Item "$root\NOP\worker\MinHook.h" | Format-List FullName,Length
+          Get-Item "$root\NOP\worker\libMinHook.x64.lib" | Format-List FullName,Length
+
+      - name: Build PR19 DirectJS worker
+        shell: pwsh
+        run: |
+          $root = "$env:GITHUB_WORKSPACE"
+          $out = "$root\x64\Release\"
+          New-Item -ItemType Directory -Path $out -Force | Out-Null
+
+          msbuild "$root\NOP\worker\worker.vcxproj" `
+            /m `
+            /p:Configuration=Release `
+            /p:Platform=x64 `
+            "/p:SolutionDir=$root\" `
+            "/p:OutDir=$out"
+
+          if ($LASTEXITCODE -ne 0) { throw "Worker build failed." }
+          if (-not (Test-Path "$out\dxgi.dll")) { throw "dxgi.dll was not created." }
+
+      - name: Verify PR19 and DirectJS markers
+        shell: pwsh
+        run: |
+          $dll = "$env:GITHUB_WORKSPACE\x64\Release\dxgi.dll"
+          $bytes = [System.IO.File]::ReadAllBytes($dll)
+          $unicode = [System.Text.Encoding]::Unicode.GetString($bytes)
+          $ascii = [System.Text.Encoding]::ASCII.GetString($bytes)
+
+          foreach ($marker in @(
+            "MessageAdKeyOutlookUpSell",
+            "hidePremium",
+            "MutationObserver",
+            "CreateCoreWebView2EnvironmentWithOptions",
+            "PR19 WebView2 hook enabled"
+          )) {
+            if (-not ($unicode.Contains($marker) -or $ascii.Contains($marker))) {
+              throw "Built worker is missing marker: $marker"
+            }
+          }
+
+          Write-Host "PR19 hook + DirectJS payload verified."
+
+      - name: Publish GUI with rebuilt worker embedded
+        shell: pwsh
+        run: |
+          $root = "$env:GITHUB_WORKSPACE"
+
+          dotnet publish "$root\NOP\gui\gui.csproj" `
+            -c Release `
+            -r win-x64 `
+            --self-contained false `
+            "-p:SolutionDir=$root\"
+
+          if ($LASTEXITCODE -ne 0) { throw "GUI publish failed." }
+
+          $exe = "$root\NOP\gui\bin\Release\net8.0-windows\win-x64\publish\NewOutlookPatcher.exe"
+          if (-not (Test-Path $exe)) { throw "NewOutlookPatcher.exe was not created." }
+
+      - name: Prepare artifact
+        shell: pwsh
+        run: |
+          $root = "$env:GITHUB_WORKSPACE"
+          $dist = "$root\dist"
+          New-Item -ItemType Directory -Path $dist -Force | Out-Null
+
+          Copy-Item `
+            "$root\NOP\gui\bin\Release\net8.0-windows\win-x64\publish\NewOutlookPatcher.exe" `
+            "$dist\NewOutlookPatcher-NOAB-PR19-DirectJS.exe"
+
+          Copy-Item "$root\x64\Release\dxgi.dll" "$dist\dxgi.dll"
+          Copy-Item "$root\NOP\worker\dllmain.cpp" "$dist\dllmain.cpp"
+
+          Get-ChildItem $dist -File | ForEach-Object {
+            $hash = Get-FileHash $_.FullName -Algorithm SHA256
+            "$($hash.Hash)  $($_.Name)"
+          } | Set-Content "$dist\SHA256SUMS.txt"
+
+      - name: Upload x64 build
+        uses: actions/upload-artifact@v4
+        with:
+          name: NewOutlookPatcher-NOAB-PR19-DirectJS-x64
+          if-no-files-found: error
+          path: dist
