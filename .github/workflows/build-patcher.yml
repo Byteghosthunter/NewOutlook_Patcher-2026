@@ -112,13 +112,23 @@ jobs:
             "MessageAdKeyOutlookUpSell",
             "WebView2 MinHook enabled successfully",
             "CreateCoreWebView2EnvironmentWithOptions intercepted",
-            "AddScriptToExecuteOnDocumentCreated",
-            "ThunkOldAddress"
+            "AddScriptToExecuteOnDocumentCreated"
           )) {
             if (-not ($unicode.Contains($marker) -or $ascii.Contains($marker))) {
-              throw "Built worker is missing marker: $marker"
+              throw "Built worker is missing runtime marker: $marker"
             }
           }
+
+          # ThunkOldAddress is a C++ identifier, not a runtime string literal.
+          # Optimized MSVC builds are not expected to preserve that identifier
+          # in dxgi.dll, so verify it in the source instead of the binary.
+          $workerSource = Get-Content "$env:GITHUB_WORKSPACE\NOP\worker\dllmain.cpp" -Raw
+          if (-not $workerSource.Contains("ThunkOldAddress") -or
+              -not $workerSource.Contains("kernelbaseHooks[0].ThunkOldAddress")) {
+            throw "Worker source is missing the AppVerifier ThunkOldAddress chaining logic."
+          }
+
+          Write-Host "Known-working runtime markers and source invariants verified."
 
       - name: Verify HOSTS safety list
         shell: pwsh
