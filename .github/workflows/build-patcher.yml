@@ -1,4 +1,4 @@
-name: Build NewOutlookPatcher NOAB v1.1 Integrated
+name: Build NewOutlookPatcher NOAB v1.2 External HOSTS
 
 on:
   workflow_dispatch:
@@ -175,15 +175,18 @@ jobs:
 
           Copy-Item `
             "$root\NOP\gui\bin\Release\net8.0-windows\win-x64\publish\NewOutlookPatcher.exe" `
-            "$dist\NewOutlookPatcher-NOAB-2026-v1.1.exe"
+            "$dist\NewOutlookPatcher-NOAB-2026-v1.2.exe"
 
           Copy-Item "$root\x64\Release\dxgi.dll" "$dist\NewOutlookPatcher.dll"
+
+          Copy-Item "$root\hosts\NOAB-HOSTS.cmd" "$dist\NOAB-HOSTS.cmd"
+          Copy-Item "$root\hosts\NOAB-Hosts.ps1" "$dist\NOAB-Hosts.ps1"
+          Copy-Item "$root\hosts\domains.txt" "$dist\domains.txt"
 
           # These files are useful for release/debugging, but they are not
           # required to build or run the patcher. Do not fail the whole build
           # if the repository was intentionally cleaned up.
           foreach ($optional in @(
-            "domains.txt",
             "Check-NOAB-Install.ps1",
             "RELEASE-NOTES-v1.1.md",
             "LICENSE",
@@ -207,6 +210,6 @@ jobs:
       - name: Upload v1.1 artifact
         uses: actions/upload-artifact@v4
         with:
-          name: NewOutlookPatcher-NOAB-2026-v1.1-x64
+          name: NewOutlookPatcher-NOAB-2026-v1.2-x64
           if-no-files-found: error
           path: dist
