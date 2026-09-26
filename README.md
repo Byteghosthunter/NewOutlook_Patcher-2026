@@ -1,5 +1,11 @@
 # NewOutlookPatcher NOAB 2026
 
+> **Based on the original [valinet/NewOutlookPatcher](https://github.com/valinet/NewOutlookPatcher).**  
+> Large parts of the native patcher and application architecture originate from that project.  
+> This repository extends and modifies it for newer New Outlook builds, the confirmed WebView2/Premium UI patch, optional HOSTS-based ad blocking, and related installer/build changes.
+>
+> This repository is not currently a GitHub-network fork, so GitHub does not automatically display the “forked from” badge. The upstream project is credited here explicitly instead.
+
 Open-source ad blocking and UI cleanup for **New Outlook for Windows**.
 
 The project combines the known-working New Outlook WebView2 patch with an optional Windows `HOSTS` block for confirmed Outlook advertising endpoints.
@@ -345,23 +351,43 @@ If a later Outlook version stops working, please include the Outlook version and
 
 ---
 
-## Credits
+## Credits and upstream project
 
-This project builds on the original **NewOutlookPatcher** work and uses **MinHook** for native API hooking.
+This project is based substantially on the original:
 
-MinHook is distributed under its BSD-style license. See:
+**[valinet/NewOutlookPatcher](https://github.com/valinet/NewOutlookPatcher)**
+
+The original project provided the core New Outlook patcher architecture, including the native worker / DLL approach, GUI structure, and Application Verifier / IFEO-based loading mechanism.
+
+NewOutlookPatcher NOAB keeps and modifies substantial portions of that work. The NOAB-specific changes include, among other things:
+
+- compatibility work for newer New Outlook builds;
+- the confirmed WebView2 hook path used by the current working baseline;
+- Premium / Upsell element hiding;
+- optional Windows HOSTS ad blocking;
+- Kaspersky-aware HOSTS handling;
+- updated GUI, installer flow, diagnostics, build workflow, and release packaging.
+
+Additional WebView2 / MinHook work was also informed by upstream community contributions, including the MinHook-based direction from the original NewOutlookPatcher project ecosystem.
+
+### Licensing
+
+The original NewOutlookPatcher project is distributed under the **GNU General Public License v3.0**, and this derivative project is likewise distributed under the GPL-3.0 license.
+
+The repository should retain the applicable original copyright and license notices.
+
+MinHook is a separate third-party component distributed under its own BSD-style license. See:
 
 ```text
 THIRD-PARTY-MINHOOK-LICENSE.txt
 ```
 
-The project itself is distributed under:
+Project license:
 
 ```text
-GNU General Public License v3.0
+LICENSE
 ```
 
-See `LICENSE` for the full license text.
 
 ---
 
