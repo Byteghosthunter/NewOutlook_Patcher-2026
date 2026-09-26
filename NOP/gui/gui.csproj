@@ -1,0 +1,36 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+	<RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <Nullable>enable</Nullable>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>enable</ImplicitUsings>
+	<ForceDesignerDPIUnaware>true</ForceDesignerDPIUnaware>
+	<Title>NewOutlookPatcher NOAB 2026</Title>
+	<AssemblyVersion>1.2.0.0</AssemblyVersion>
+	<FileVersion>1.2.0.0</FileVersion>
+	<PackageProjectUrl>https://github.com/Byteghosthunter/NewOutlook_Patcher-2026</PackageProjectUrl>
+	<Copyright>Copyright 2024 VALINET Solutions. All rights reserved.</Copyright>
+	<Description>New Outlook 2026 ad blocking with the confirmed WebView2 UI patch and optional Windows HOSTS blocking.</Description>
+	<Version>1.2.0.0</Version>
+	<PublishSingleFile>true</PublishSingleFile>
+	<PackageId>NewOutlookPatcher</PackageId>
+	<Authors>NewOutlookPatcher</Authors>
+	<Company>VALINET Solutions SRL</Company>
+	<Product>NewOutlookPatcher NOAB 2026</Product>
+	<IncludeSymbols>True</IncludeSymbols>
+	<TargetName>NewOutlookPatcher</TargetName>
+	<AssemblyName>NewOutlookPatcher</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Remove="dxgi.dll" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="$(SolutionDir)\x64\Release\dxgi.dll" />
+  </ItemGroup>
+
+</Project>

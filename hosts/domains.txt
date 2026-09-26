@@ -1,0 +1,9 @@
+# NewOutlookAdBlocker-2026
+# Candidate ad-related domains observed during New Outlook testing.
+# One hostname per line.
+#
+# Current test set:
+msft-ssp.adnxs.com
+msft-ssp-fra1.adnxs.com
+eb2.3lift.com
+b1t-dubdc2.outbrain.com
