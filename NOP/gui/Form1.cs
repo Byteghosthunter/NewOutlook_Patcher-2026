@@ -236,54 +236,122 @@ Licensed under GPL-3.0.",
         private bool ApplyHostsWithExternalHelper(bool desiredState)
         {
             bool currentState = HostsBlocker.IsInstalled();
+
+            // No state change = no extra CMD and no second UAC prompt.
             if (currentState == desiredState)
                 return true;
 
             string appDirectory =
-                Path.GetDirectoryName(Environment.ProcessPath ?? Application.ExecutablePath)
-                ?? Environment.CurrentDirectory;
+                Path.GetDirectoryName(
+                    Environment.ProcessPath ?? Application.ExecutablePath
+                ) ?? Environment.CurrentDirectory;
 
-            string helperPath = Path.Combine(appDirectory, "NOAB-HOSTS.cmd");
+            string helperName =
+                desiredState
+                    ? "NOAB-HOSTS-INSTALL.cmd"
+                    : "NOAB-HOSTS-REMOVE.cmd";
+
+            string helperPath =
+                Path.Combine(appDirectory, helperName);
 
             if (!File.Exists(helperPath))
             {
                 MessageBox.Show(
                     "The external HOSTS helper was not found:\r\n\r\n" +
                     helperPath +
-                    "\r\n\r\nKeep NOAB-HOSTS.cmd, NOAB-Hosts.ps1 and domains.txt next to the patcher EXE.",
+                    "\r\n\r\nKeep both HOSTS .cmd files, NOAB-Hosts.ps1 and domains.txt next to the patcher EXE.",
                     "NewOutlookPatcher NOAB",
                     MessageBoxButtons.OK,
-                    MessageBoxIcon.Error);
+                    MessageBoxIcon.Error
+                );
                 return false;
             }
 
             try
             {
-                using Process? helper = Process.Start(new ProcessStartInfo
-                {
-                    FileName = helperPath,
-                    Arguments = desiredState ? "Install" : "Uninstall",
-                    WorkingDirectory = appDirectory,
-                    UseShellExecute = true
-                });
+                string commandProcessor =
+                    Environment.GetEnvironmentVariable("ComSpec") ?? "cmd.exe";
+
+                using Process? helper = Process.Start(
+                    new ProcessStartInfo
+                    {
+                        FileName = commandProcessor,
+                        Arguments = $"/d /c \"\"{helperPath}\"\"",
+                        WorkingDirectory = appDirectory,
+                        UseShellExecute = true,
+                        WindowStyle = ProcessWindowStyle.Normal
+                    }
+                );
 
                 if (helper == null)
-                    throw new InvalidOperationException("The HOSTS helper could not be started.");
+                    throw new InvalidOperationException(
+                        "The HOSTS helper process could not be started."
+                    );
 
                 helper.WaitForExit();
 
                 if (helper.ExitCode != 0)
-                    return false;
+                {
+                    if (helper.ExitCode == 23)
+                    {
+                        MessageBox.Show(
+                            "Kaspersky is currently protecting the Windows HOSTS file.\r\n\r\n" +
+                            "Pause Kaspersky protection temporarily, click Apply again, " +
+                            "then re-enable Kaspersky protection immediately afterwards.\r\n\r\n" +
+                            "NOAB will not disable Kaspersky or alter HOSTS ownership/ACLs automatically.",
+                            "NewOutlookPatcher NOAB - HOSTS protected",
+                            MessageBoxButtons.OK,
+                            MessageBoxIcon.Warning
+                        );
+                    }
+                    else if (helper.ExitCode == 24)
+                    {
+                        MessageBox.Show(
+                            "The Windows HOSTS file is being protected by security software or a file-system filter.\r\n\r\n" +
+                            "No Kaspersky filter was detected. Check the active security software and retry.",
+                            "NewOutlookPatcher NOAB - HOSTS protected",
+                            MessageBoxButtons.OK,
+                            MessageBoxIcon.Warning
+                        );
+                    }
+                    else
+                    {
+                        MessageBox.Show(
+                            "The HOSTS helper returned exit code " +
+                            helper.ExitCode + ".",
+                            "NewOutlookPatcher NOAB",
+                            MessageBoxButtons.OK,
+                            MessageBoxIcon.Warning
+                        );
+                    }
 
-                return HostsBlocker.IsInstalled() == desiredState;
+                    return false;
+                }
+
+                bool actualState = HostsBlocker.IsInstalled();
+
+                if (actualState != desiredState)
+                {
+                    MessageBox.Show(
+                        "The HOSTS helper completed, but the requested HOSTS state could not be verified.",
+                        "NewOutlookPatcher NOAB",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Warning
+                    );
+                    return false;
+                }
+
+                return true;
             }
             catch (Exception ex)
             {
                 MessageBox.Show(
-                    "Unable to run the separate HOSTS helper.\r\n\r\n" + ex.Message,
+                    "Unable to start the separate HOSTS helper.\r\n\r\n" +
+                    ex.Message,
                     "NewOutlookPatcher NOAB",
                     MessageBoxButtons.OK,
-                    MessageBoxIcon.Error);
+                    MessageBoxIcon.Error
+                );
                 return false;
             }
         }
@@ -444,7 +512,7 @@ Licensed under GPL-3.0.",
             }
 
             // Separate HOSTS step: visible CMD + second UAC approval.
-            bool hostsStepOk = ApplyHostsWithExternalHelper(hostsEnabled);
+            ApplyHostsWithExternalHelper(hostsEnabled);
 
             // Restart olk
             try
@@ -476,16 +544,6 @@ Licensed under GPL-3.0.",
             bool hostsNowInstalled = HostsBlocker.IsInstalled();
             FormatUI(patcherNowInstalled, hostsNowInstalled);
             chkBlockAdDomains.Checked = hostsNowInstalled;
-
-            if (!hostsStepOk)
-            {
-                MessageBox.Show(
-                    "The Outlook UI patch was applied, but the separate HOSTS step did not reach the requested state.\r\n\r\n" +
-                    "Run NOAB-HOSTS.cmd manually from the release folder if needed.",
-                    "NewOutlookPatcher NOAB",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Warning);
-            }
 
             this.TopMost = true;
         }

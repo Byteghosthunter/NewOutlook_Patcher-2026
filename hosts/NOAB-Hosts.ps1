@@ -31,7 +31,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$ScriptVersion = "0.6"
+$ScriptVersion = "0.6-noab-kaspersky-aware"
 $HostsPath     = Join-Path $env:SystemRoot "System32\drivers\etc\hosts"
 $DomainsPath   = Join-Path $PSScriptRoot "domains.txt"
 
@@ -228,6 +228,95 @@ function Backup-HostsFile {
     return $backupPath
 }
 
+function Get-KasperskyProtectionEvidence {
+    $evidence = New-Object System.Collections.Generic.List[string]
+
+    # Security Center registration: useful for a friendly product name.
+    try {
+        $products = @(
+            Get-CimInstance `
+                -Namespace "root/SecurityCenter2" `
+                -ClassName "AntiVirusProduct" `
+                -ErrorAction Stop |
+            Where-Object {
+                $_.displayName -match '(?i)kaspersky'
+            }
+        )
+
+        foreach ($product in $products) {
+            if ($product.displayName) {
+                $evidence.Add("Security Center: $($product.displayName)")
+            }
+        }
+    }
+    catch {
+        Write-Log "Kaspersky SecurityCenter2 detection failed: $($_.Exception.Message)" "WARN"
+    }
+
+    # Loaded Kaspersky file-system filters are stronger evidence that file
+    # protection is active. Do not rely on localized product names here.
+    try {
+        $fltmc = Join-Path $env:SystemRoot "System32\fltmc.exe"
+        if (Test-Path -LiteralPath $fltmc) {
+            $filterOutput = (& $fltmc filters 2>$null | Out-String)
+
+            if ($filterOutput -match '(?im)^\s*klif(?:\.|\s)') {
+                $evidence.Add("Loaded Kaspersky file-system filter: klif")
+            }
+
+            if ($filterOutput -match '(?im)^\s*klbackupflt(?:\.|\s)') {
+                $evidence.Add("Loaded Kaspersky file-system filter: klbackupflt")
+            }
+        }
+    }
+    catch {
+        Write-Log "Kaspersky filter detection failed: $($_.Exception.Message)" "WARN"
+    }
+
+    return @($evidence | Select-Object -Unique)
+}
+
+function Stop-ForHostsWriteDenied {
+    $kasperskyEvidence = @(Get-KasperskyProtectionEvidence)
+
+    Write-Host ""
+    Write-Host "The Windows HOSTS file denied write access." -ForegroundColor Red
+    Write-Host ""
+
+    if ($kasperskyEvidence.Count -gt 0) {
+        Write-Host "Kaspersky protection appears to be blocking the HOSTS file." -ForegroundColor Yellow
+        Write-Host ""
+        Write-Host "Detected evidence:" -ForegroundColor DarkGray
+
+        foreach ($item in $kasperskyEvidence) {
+            Write-Host "  - $item" -ForegroundColor DarkGray
+        }
+
+        Write-Host ""
+        Write-Host "To continue safely:" -ForegroundColor Cyan
+        Write-Host "  1. Temporarily pause Kaspersky protection."
+        Write-Host "  2. Run this HOSTS action again."
+        Write-Host "  3. Re-enable Kaspersky protection immediately afterwards."
+        Write-Host ""
+        Write-Host "NOAB will NOT disable Kaspersky or change HOSTS ownership/ACLs automatically." -ForegroundColor Green
+
+        Write-Log (
+            "HOSTS write denied; Kaspersky protection evidence detected: " +
+            ($kasperskyEvidence -join "; ")
+        ) "WARN"
+
+        exit 23
+    }
+
+    Write-Host "The file has normal NTFS permissions but still cannot be opened for writing." -ForegroundColor Yellow
+    Write-Host "Another security product or file-system filter may be protecting it." -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "NOAB will not alter HOSTS ownership or ACLs automatically." -ForegroundColor Green
+
+    Write-Log "HOSTS write denied; no Kaspersky evidence detected." "ERROR"
+    exit 24
+}
+
 function Test-HostsWriteAccess {
     $stream = $null
 
@@ -416,7 +505,7 @@ function Install-Block {
     }
 
     if (-not (Test-HostsWriteAccess)) {
-        throw "The Windows hosts file cannot currently be opened for writing."
+        Stop-ForHostsWriteDenied
     }
 
     $backupPath = Backup-HostsFile
@@ -508,7 +597,7 @@ function Uninstall-Block {
     }
 
     if (-not (Test-HostsWriteAccess)) {
-        throw "The Windows hosts file cannot currently be opened for writing."
+        Stop-ForHostsWriteDenied
     }
 
     $backupPath = Backup-HostsFile
