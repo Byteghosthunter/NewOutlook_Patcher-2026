@@ -1,4 +1,4 @@
-name: Build NewOutlookPatcher NOAB v1.2 External HOSTS
+name: Build NewOutlookPatcher NOAB v1.2.1 Kaspersky-aware HOSTS
 
 on:
   workflow_dispatch:
@@ -6,7 +6,7 @@ on:
     branches:
       - main
     tags:
-      - "v1.1*"
+      - "v1.2*"
 
 permissions:
   contents: read
@@ -150,6 +150,45 @@ jobs:
             throw "Safety failure: outlook.office.com must never be in the managed HOSTS block."
           }
 
+      - name: Verify Kaspersky-aware HOSTS helper
+        shell: pwsh
+        run: |
+          $hostsScript = Get-Content "$env:GITHUB_WORKSPACE\hosts\NOAB-Hosts.ps1" -Raw
+
+          foreach ($marker in @(
+            "Get-KasperskyProtectionEvidence",
+            "Loaded Kaspersky file-system filter: klif",
+            "exit 23",
+            "NOAB will NOT disable Kaspersky or change HOSTS ownership/ACLs automatically."
+          )) {
+            if (-not $hostsScript.Contains($marker)) {
+              throw "HOSTS helper is missing Kaspersky-aware marker: $marker"
+            }
+          }
+
+          foreach ($forbidden in @(
+            "takeown.exe",
+            "icacls.exe",
+            "Set-Acl -LiteralPath `$HostsPath"
+          )) {
+            if ($hostsScript.Contains($forbidden)) {
+              throw "HOSTS helper must not mutate ownership/ACLs: $forbidden"
+            }
+          }
+
+          foreach ($helper in @(
+            "NOAB-HOSTS-INSTALL.cmd",
+            "NOAB-HOSTS-REMOVE.cmd",
+            "NOAB-Hosts.ps1",
+            "domains.txt"
+          )) {
+            if (-not (Test-Path "$env:GITHUB_WORKSPACE\hosts\$helper")) {
+              throw "Required HOSTS release helper is missing: $helper"
+            }
+          }
+
+          Write-Host "Kaspersky-aware HOSTS helper verified."
+
       - name: Publish GUI after worker build
         shell: pwsh
         run: |
@@ -175,20 +214,21 @@ jobs:
 
           Copy-Item `
             "$root\NOP\gui\bin\Release\net8.0-windows\win-x64\publish\NewOutlookPatcher.exe" `
-            "$dist\NewOutlookPatcher-NOAB-2026-v1.2.exe"
+            "$dist\NewOutlookPatcher-NOAB-2026-v1.2.1.exe"
 
           Copy-Item "$root\x64\Release\dxgi.dll" "$dist\NewOutlookPatcher.dll"
-
-          Copy-Item "$root\hosts\NOAB-HOSTS.cmd" "$dist\NOAB-HOSTS.cmd"
+          Copy-Item "$root\hosts\NOAB-HOSTS-INSTALL.cmd" "$dist\NOAB-HOSTS-INSTALL.cmd"
+          Copy-Item "$root\hosts\NOAB-HOSTS-REMOVE.cmd" "$dist\NOAB-HOSTS-REMOVE.cmd"
           Copy-Item "$root\hosts\NOAB-Hosts.ps1" "$dist\NOAB-Hosts.ps1"
           Copy-Item "$root\hosts\domains.txt" "$dist\domains.txt"
+
 
           # These files are useful for release/debugging, but they are not
           # required to build or run the patcher. Do not fail the whole build
           # if the repository was intentionally cleaned up.
           foreach ($optional in @(
             "Check-NOAB-Install.ps1",
-            "RELEASE-NOTES-v1.1.md",
+            "RELEASE-NOTES-v1.2.1.md",
             "LICENSE",
             "THIRD-PARTY-MINHOOK-LICENSE.txt"
           )) {
@@ -207,9 +247,9 @@ jobs:
             "$($hash.Hash)  $($_.Name)"
           } | Set-Content "$dist\SHA256SUMS.txt"
 
-      - name: Upload v1.1 artifact
+      - name: Upload v1.2.1 artifact
         uses: actions/upload-artifact@v4
         with:
-          name: NewOutlookPatcher-NOAB-2026-v1.2-x64
+          name: NewOutlookPatcher-NOAB-2026-v1.2.1-x64
           if-no-files-found: error
           path: dist
