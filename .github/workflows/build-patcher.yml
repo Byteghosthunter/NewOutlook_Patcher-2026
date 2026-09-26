@@ -1,4 +1,4 @@
-name: Build NewOutlookPatcher NOAB PR19 DirectJS
+name: Build NewOutlookPatcher NOAB Trace
 
 on:
   workflow_dispatch:
@@ -6,6 +6,7 @@ on:
     paths:
       - "NOP/**"
       - "NOP.sln"
+      - "Check-NOAB-Install.ps1"
       - ".github/workflows/build-patcher.yml"
 
 permissions:
@@ -62,10 +63,7 @@ jobs:
           Copy-Item "$src\include\MinHook.h" "$root\NOP\worker\MinHook.h" -Force
           Copy-Item $lib.FullName "$root\NOP\worker\libMinHook.x64.lib" -Force
 
-          Get-Item "$root\NOP\worker\MinHook.h" | Format-List FullName,Length
-          Get-Item "$root\NOP\worker\libMinHook.x64.lib" | Format-List FullName,Length
-
-      - name: Build PR19 DirectJS worker
+      - name: Build trace worker
         shell: pwsh
         run: |
           $root = "$env:GITHUB_WORKSPACE"
@@ -82,7 +80,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Worker build failed." }
           if (-not (Test-Path "$out\dxgi.dll")) { throw "dxgi.dll was not created." }
 
-      - name: Verify PR19 and DirectJS markers
+      - name: Verify trace markers
         shell: pwsh
         run: |
           $dll = "$env:GITHUB_WORKSPACE\x64\Release\dxgi.dll"
@@ -92,19 +90,20 @@ jobs:
 
           foreach ($marker in @(
             "MessageAdKeyOutlookUpSell",
-            "hidePremium",
-            "MutationObserver",
-            "CreateCoreWebView2EnvironmentWithOptions",
-            "PR19 WebView2 hook enabled"
+            "WebView2 MinHook enabled successfully",
+            "CreateCoreWebView2EnvironmentWithOptions intercepted",
+            "ControllerCompleted intercepted",
+            "AddScriptToExecuteOnDocumentCreated",
+            "Environment10 exists"
           )) {
             if (-not ($unicode.Contains($marker) -or $ascii.Contains($marker))) {
-              throw "Built worker is missing marker: $marker"
+              throw "Built worker is missing trace marker: $marker"
             }
           }
 
-          Write-Host "PR19 hook + DirectJS payload verified."
+          Write-Host "Trace worker verified."
 
-      - name: Publish GUI with rebuilt worker embedded
+      - name: Publish GUI with trace worker embedded
         shell: pwsh
         run: |
           $root = "$env:GITHUB_WORKSPACE"
@@ -129,10 +128,11 @@ jobs:
 
           Copy-Item `
             "$root\NOP\gui\bin\Release\net8.0-windows\win-x64\publish\NewOutlookPatcher.exe" `
-            "$dist\NewOutlookPatcher-NOAB-PR19-DirectJS.exe"
+            "$dist\NewOutlookPatcher-NOAB-Trace.exe"
 
           Copy-Item "$root\x64\Release\dxgi.dll" "$dist\dxgi.dll"
           Copy-Item "$root\NOP\worker\dllmain.cpp" "$dist\dllmain.cpp"
+          Copy-Item "$root\Check-NOAB-Install.ps1" "$dist\Check-NOAB-Install.ps1"
 
           Get-ChildItem $dist -File | ForEach-Object {
             $hash = Get-FileHash $_.FullName -Algorithm SHA256
@@ -142,6 +142,6 @@ jobs:
       - name: Upload x64 build
         uses: actions/upload-artifact@v4
         with:
-          name: NewOutlookPatcher-NOAB-PR19-DirectJS-x64
+          name: NewOutlookPatcher-NOAB-Trace-x64
           if-no-files-found: error
           path: dist
