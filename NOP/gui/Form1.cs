@@ -480,9 +480,7 @@ Licensed under GPL-3.0.",
             if (!hostsStepOk)
             {
                 MessageBox.Show(
-                    "The Outlook UI patch was applied, but the separate HOSTS step did not reach the requested state.
-
-" +
+                    "The Outlook UI patch was applied, but the separate HOSTS step did not reach the requested state.\r\n\r\n" +
                     "Run NOAB-HOSTS.cmd manually from the release folder if needed.",
                     "NewOutlookPatcher NOAB",
                     MessageBoxButtons.OK,
