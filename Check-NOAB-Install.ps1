@@ -2,12 +2,20 @@
 $ErrorActionPreference = "SilentlyContinue"
 
 Write-Host ""
-Write-Host "=== NewOutlookPatcher-NOAB diagnostic ===" -ForegroundColor Cyan
+Write-Host "=== NewOutlookPatcher NOAB diagnostic ===" -ForegroundColor Cyan
 Write-Host ""
 
 $dll = Join-Path $env:SystemRoot "System32\NewOutlookPatcher.dll"
 $ifeo = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\olk.exe"
+$hostsPath = Join-Path $env:SystemRoot "System32\drivers\etc\hosts"
 $log = Join-Path $env:LOCALAPPDATA "NewOutlookAdBlocker\NewOutlookPatcher-NOAB.log"
+
+$domains = @(
+    "msft-ssp.adnxs.com",
+    "msft-ssp-fra1.adnxs.com",
+    "eb2.3lift.com",
+    "b1t-dubdc2.outbrain.com"
+)
 
 Write-Host "[1] Installed worker" -ForegroundColor Yellow
 if (Test-Path -LiteralPath $dll) {
@@ -44,7 +52,32 @@ if (Test-Path $ifeo) {
 }
 
 Write-Host ""
-Write-Host "[3] Outlook process" -ForegroundColor Yellow
+Write-Host "[3] HOSTS ad blocking" -ForegroundColor Yellow
+if (Test-Path $hostsPath) {
+    $hostsText = Get-Content -LiteralPath $hostsPath -Raw
+    $begin = $hostsText.Contains("# BEGIN NewOutlookAdBlocker-2026")
+    $end = $hostsText.Contains("# END NewOutlookAdBlocker-2026")
+    Write-Host "Managed block markers: $($begin -and $end)"
+    foreach ($domain in $domains) {
+        $escaped = [regex]::Escape($domain)
+        $blocked = [regex]::IsMatch(
+            $hostsText,
+            "(?im)^\s*0\.0\.0\.0\s+$escaped\s*(?:#.*)?$"
+        )
+        Write-Host ("{0}: {1}" -f $domain, $(if ($blocked) { "BLOCKED" } else { "NOT BLOCKED" }))
+    }
+
+    $coreBlocked = [regex]::IsMatch(
+        $hostsText,
+        "(?im)^\s*(?:0\.0\.0\.0|127\.0\.0\.1)\s+outlook\.office\.com\s*(?:#.*)?$"
+    )
+    Write-Host "outlook.office.com blocked: $coreBlocked"
+} else {
+    Write-Host "HOSTS file not found." -ForegroundColor Red
+}
+
+Write-Host ""
+Write-Host "[4] Outlook process" -ForegroundColor Yellow
 $olk = Get-Process olk -ErrorAction SilentlyContinue
 if ($olk) {
     foreach ($p in $olk) {
@@ -62,13 +95,13 @@ if ($olk) {
 }
 
 Write-Host ""
-Write-Host "[4] Runtime trace log" -ForegroundColor Yellow
+Write-Host "[5] Runtime trace log" -ForegroundColor Yellow
 if (Test-Path $log) {
     Write-Host "LOG: $log"
     Write-Host ""
-    Get-Content -LiteralPath $log -Tail 200
+    Get-Content -LiteralPath $log -Tail 100
 } else {
-    Write-Host "NO LOG FOUND: $log" -ForegroundColor Red
+    Write-Host "No runtime trace log found."
 }
 
 Write-Host ""

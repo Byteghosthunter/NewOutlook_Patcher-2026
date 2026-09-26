@@ -305,7 +305,7 @@
             MinimizeBox = false;
             Name = "Form1";
             StartPosition = FormStartPosition.CenterScreen;
-            Text = "NewOutlookPatcher NOAB Trace";
+            Text = "NewOutlookPatcher NOAB 2026";
             TopMost = true;
             Load += Form1_Load;
             KeyDown += Form1_KeyDown;

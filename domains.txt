@@ -1,0 +1,7 @@
+# Domains intentionally blocked by the integrated NOAB HOSTS option.
+# outlook.office.com is intentionally NOT blocked.
+
+msft-ssp.adnxs.com
+msft-ssp-fra1.adnxs.com
+eb2.3lift.com
+b1t-dubdc2.outbrain.com

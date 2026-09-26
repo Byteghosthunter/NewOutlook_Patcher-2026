@@ -8,18 +8,18 @@
     <UseWindowsForms>true</UseWindowsForms>
     <ImplicitUsings>enable</ImplicitUsings>
 	<ForceDesignerDPIUnaware>true</ForceDesignerDPIUnaware>
-	<Title>NewOutlookPatcher</Title>
-	<AssemblyVersion>2026.09.26.05</AssemblyVersion>
-	<FileVersion>2026.09.26.05</FileVersion>
-	<PackageProjectUrl>https://github.com/valinet/NewOutlookPatcher</PackageProjectUrl>
+	<Title>NewOutlookPatcher NOAB 2026</Title>
+	<AssemblyVersion>1.1.0.0</AssemblyVersion>
+	<FileVersion>1.1.0.0</FileVersion>
+	<PackageProjectUrl>https://github.com/Byteghosthunter/NewOutlook_Patcher-2026</PackageProjectUrl>
 	<Copyright>Copyright 2024 VALINET Solutions. All rights reserved.</Copyright>
-	<Description>Original NewOutlookPatcher architecture with Outlook 2026 Premium/Upsell DirectJS hiding.</Description>
-	<Version>2026.09.26.05</Version>
+	<Description>New Outlook 2026 ad blocking with the confirmed WebView2 UI patch and optional Windows HOSTS blocking.</Description>
+	<Version>1.1.0.0</Version>
 	<PublishSingleFile>true</PublishSingleFile>
 	<PackageId>NewOutlookPatcher</PackageId>
 	<Authors>NewOutlookPatcher</Authors>
 	<Company>VALINET Solutions SRL</Company>
-	<Product>NewOutlookPatcher</Product>
+	<Product>NewOutlookPatcher NOAB 2026</Product>
 	<IncludeSymbols>True</IncludeSymbols>
 	<TargetName>NewOutlookPatcher</TargetName>
 	<AssemblyName>NewOutlookPatcher</AssemblyName>

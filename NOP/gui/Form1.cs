@@ -13,6 +13,8 @@ namespace gui
 {
     public partial class Form1 : Form
     {
+        private CheckBox chkBlockAdDomains = null!;
+        private Label lblNoabStatus = null!;
         [DllImport("user32.dll", SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
         public static extern bool SetForegroundWindow(IntPtr hWnd);
@@ -113,36 +115,88 @@ namespace gui
             return isFileDropped && isVerifierEnabled && isSetAsVerifierDll;
         }
 
-        public void FormatUI(bool patcherInstalled)
+        public void FormatUI(bool patcherInstalled, bool hostsInstalled)
         {
-            if (patcherInstalled)
-            {
-                btnApplyRestart.Text = "&Apply";
-                btnUninstall.Enabled = true;
+            bool anythingInstalled = patcherInstalled || hostsInstalled;
+
+            btnApplyRestart.Text = anythingInstalled ? "&Apply" : "&Install";
+            btnUninstall.Enabled = anythingInstalled;
+
+            if (anythingInstalled)
                 label5.Text = label5.Text.Replace("Install", "Apply");
-            }
             else
-            {
-                btnApplyRestart.Text = "&Install";
-                btnUninstall.Enabled = false;
                 label5.Text = label5.Text.Replace("Apply", "Install");
-            }
+
+            lblNoabStatus.Text =
+                $"UI patch: {(patcherInstalled ? "Installed" : "Not installed")}   |   " +
+                $"HOSTS: {(hostsInstalled ? "Installed" : "Not installed")}";
         }
 
         public Form1()
         {
             InitializeComponent();
+            InitializeNoabReleaseControls();
+
             if (!IsAdministrator()) AddShieldToButton(btnApplyRestart);
             if (!IsAdministrator()) AddShieldToButton(btnUninstall);
         }
 
+        private void InitializeNoabReleaseControls()
+        {
+            SuspendLayout();
+
+            chkBlockAdDomains = new CheckBox
+            {
+                AutoSize = true,
+                Checked = true,
+                CheckState = CheckState.Checked,
+                Location = new Point(12, 386),
+                Name = "chkBlockAdDomains",
+                Size = new Size(260, 19),
+                TabIndex = 18,
+                Text = "Block Outlook ad domains in Windows HOSTS",
+                UseVisualStyleBackColor = true,
+            };
+            chkBlockAdDomains.CheckedChanged += chkDisableAll_CheckedChanged;
+
+            lblNoabStatus = new Label
+            {
+                AutoSize = false,
+                Location = new Point(7, 412),
+                Name = "lblNoabStatus",
+                Size = new Size(391, 20),
+                TabIndex = 19,
+                Text = "UI patch: checking...   |   HOSTS: checking...",
+            };
+
+            label5.Location = new Point(7, 438);
+            btnAbout.Location = new Point(12, 479);
+            btnUninstall.Location = new Point(196, 479);
+            btnApplyRestart.Location = new Point(300, 479);
+            ClientSize = new Size(410, 520);
+
+            Controls.Add(chkBlockAdDomains);
+            Controls.Add(lblNoabStatus);
+
+            ResumeLayout(false);
+            PerformLayout();
+        }
+
         private void Form1_Load(object sender, EventArgs e)
         {
-            // Update UI to reflect install status
-            FormatUI(IsPatcherInstalled());
+            bool patcherInstalled = IsPatcherInstalled();
+            bool hostsInstalled = HostsBlocker.IsInstalled();
 
-            // Load current settings
-            if (IsPatcherInstalled())
+            // On a completely fresh installation HOSTS blocking defaults to on.
+            // If either component is already installed, reflect the real state.
+            chkBlockAdDomains.Checked =
+                hostsInstalled || (!patcherInstalled && !hostsInstalled);
+
+            // Update UI to reflect install status.
+            FormatUI(patcherInstalled, hostsInstalled);
+
+            // Load current patcher settings.
+            if (patcherInstalled)
             {
                 byte[] buffer = File.ReadAllBytes(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "NewOutlookPatcher.dll"));
                 int numMatches = 0;
@@ -201,11 +255,12 @@ namespace gui
             if (ver != null)
             {
                 var text = string.Format(
-@"NewOutlookPatcher
+@"NewOutlookPatcher NOAB 2026
 Version {0:D4}.{1:D2}.{2:D2}.{3:D2}
 
-Copyright 2024 VALINET Solutions SRL. All rights reserved.
-Proudly engineered by Valentin-Gabriel Radu.",
+Based on NewOutlookPatcher by VALINET Solutions SRL.
+NOAB 2026 adds Outlook 2026 UI hiding and optional HOSTS ad blocking.
+Licensed under GPL-3.0.",
                     ver.Major, ver.Minor, ver.Build, ver.Revision);
                 MessageBox.Show(text, "NewOutlookPatcher", MessageBoxButtons.OK, MessageBoxIcon.Asterisk);
             }
@@ -226,11 +281,27 @@ Proudly engineered by Valentin-Gabriel Radu.",
         {
             this.TopMost = false;
 
-            bool uninstall = ((!chkDisableFirstMailAd.Checked && !chkDisableOneDriveBanner.Checked && !chkDisableWordIcon.Checked && !chkDisableExcelIcon.Checked && !chkDisablePowerPointIcon.Checked && !chkDisableToDoIcon.Checked && !chkDisableOneDriveIcon.Checked && !chkDisableMoreAppsIcon.Checked && !chkF12.Checked) || (sender == btnUninstall));
+            bool uninstallAll = sender == btnUninstall;
 
-            string exeName = "Press Yes to apply new settings to olk.exe";
-            if (!IsPatcherInstalled()) exeName = "Press Yes to install patcher in olk.exe";
-            if (uninstall) exeName = "Press Yes to uninstall patcher from olk.exe";
+            bool patcherEnabled = !uninstallAll && (
+                chkDisableFirstMailAd.Checked ||
+                chkDisableOneDriveBanner.Checked ||
+                chkDisableWordIcon.Checked ||
+                chkDisableExcelIcon.Checked ||
+                chkDisablePowerPointIcon.Checked ||
+                chkDisableToDoIcon.Checked ||
+                chkDisableOneDriveIcon.Checked ||
+                chkDisableMoreAppsIcon.Checked ||
+                chkF12.Checked
+            );
+
+            bool hostsEnabled = !uninstallAll && chkBlockAdDomains.Checked;
+
+            string exeName = "Press Yes to apply NewOutlookPatcher NOAB settings";
+            if (!IsPatcherInstalled() && !HostsBlocker.IsInstalled())
+                exeName = "Press Yes to install NewOutlookPatcher NOAB";
+            if (uninstallAll || (!patcherEnabled && !hostsEnabled))
+                exeName = "Press Yes to uninstall NewOutlookPatcher NOAB";
 
             // Create scratch dir
             string tempFolderPath = Path.GetTempPath();
@@ -247,7 +318,7 @@ Proudly engineered by Valentin-Gabriel Radu.",
             }
 
             // Extract worker to scratch dir
-            if (!uninstall) {
+            if (patcherEnabled) {
                 Assembly assembly = Assembly.GetExecutingAssembly();
                 string workerResourceName = "gui.dxgi.dll";
                 string workerPath = Path.Combine(tempFolderName, "NewOutlookPatcher.dll");
@@ -319,14 +390,53 @@ Proudly engineered by Valentin-Gabriel Radu.",
                 }
                 ProcessStartInfo psi = new ProcessStartInfo();
                 psi.FileName = Path.Combine(tempFolderName, exeName);
-                psi.Arguments = uninstall ? "--uninstall" : ("--install \"" + tempFolderName + "\"");
+                psi.Arguments =
+                    "--apply \"" + tempFolderName + "\" " +
+                    (patcherEnabled ? "--patcher-on " : "--patcher-off ") +
+                    (hostsEnabled ? "--hosts-on" : "--hosts-off");
                 psi.UseShellExecute = true;
                 psi.Verb = "runas";
-                System.Diagnostics.Process.Start(psi).WaitForExit();
+
+                using Process? elevatedProcess = System.Diagnostics.Process.Start(psi);
+                if (elevatedProcess == null)
+                    throw new InvalidOperationException("Unable to start the elevated installer.");
+
+                elevatedProcess.WaitForExit();
+
+                if (elevatedProcess.ExitCode != 0)
+                {
+                    MessageBox.Show(
+                        "The elevated installer returned exit code " +
+                        elevatedProcess.ExitCode + ".",
+                        "NewOutlookPatcher NOAB",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Error
+                    );
+                    this.TopMost = true;
+                    return;
+                }
+
+                if (IsPatcherInstalled() != patcherEnabled ||
+                    HostsBlocker.IsInstalled() != hostsEnabled)
+                {
+                    MessageBox.Show(
+                        "Apply finished, but the requested installation state could not be verified.",
+                        "NewOutlookPatcher NOAB",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Error
+                    );
+                    this.TopMost = true;
+                    return;
+                }
             }
             catch (Exception ex)
             {
-                //MessageBox.Show("Unable to launch elevated patcher.", "NewOutlookPatcher", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                MessageBox.Show(
+                    "Unable to launch or verify the elevated installer.\r\n\r\n" + ex.Message,
+                    "NewOutlookPatcher NOAB",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error
+                );
                 this.TopMost = true;
                 return;
             }
@@ -356,8 +466,11 @@ Proudly engineered by Valentin-Gabriel Radu.",
 
             }
 
-            // Update UI to reflect install status
-            FormatUI(IsPatcherInstalled());
+            // Update UI to reflect install status.
+            bool patcherNowInstalled = IsPatcherInstalled();
+            bool hostsNowInstalled = HostsBlocker.IsInstalled();
+            FormatUI(patcherNowInstalled, hostsNowInstalled);
+            chkBlockAdDomains.Checked = hostsNowInstalled;
 
             this.TopMost = true;
         }
@@ -379,10 +492,21 @@ Proudly engineered by Valentin-Gabriel Radu.",
                     chkDisableOneDriveIcon.Checked = chkDisableAll.Checked;
                     chkDisableMoreAppsIcon.Checked = chkDisableAll.Checked;
                     chkF12.Checked = chkDisableAll.Checked;
+                    chkBlockAdDomains.Checked = chkDisableAll.Checked;
                 }
                 else
                 {
-                    bool all = chkDisableFirstMailAd.Checked && chkDisableOneDriveBanner.Checked && chkDisableWordIcon.Checked && chkDisableExcelIcon.Checked && chkDisablePowerPointIcon.Checked && chkDisableToDoIcon.Checked && chkDisableOneDriveIcon.Checked && chkDisableMoreAppsIcon.Checked && chkF12.Checked;
+                    bool all =
+                        chkDisableFirstMailAd.Checked &&
+                        chkDisableOneDriveBanner.Checked &&
+                        chkDisableWordIcon.Checked &&
+                        chkDisableExcelIcon.Checked &&
+                        chkDisablePowerPointIcon.Checked &&
+                        chkDisableToDoIcon.Checked &&
+                        chkDisableOneDriveIcon.Checked &&
+                        chkDisableMoreAppsIcon.Checked &&
+                        chkF12.Checked &&
+                        chkBlockAdDomains.Checked;
                     if (all) chkDisableAll.Checked = true;
                     else chkDisableAll.Checked = false;
                 }
