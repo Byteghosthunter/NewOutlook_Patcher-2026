@@ -305,7 +305,7 @@
             MinimizeBox = false;
             Name = "Form1";
             StartPosition = FormStartPosition.CenterScreen;
-            Text = "NewOutlookPatcher NOAB PR19 DirectJS";
+            Text = "NewOutlookPatcher NOAB Trace";
             TopMost = true;
             Load += Form1_Load;
             KeyDown += Form1_KeyDown;

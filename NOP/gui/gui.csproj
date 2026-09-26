@@ -9,12 +9,12 @@
     <ImplicitUsings>enable</ImplicitUsings>
 	<ForceDesignerDPIUnaware>true</ForceDesignerDPIUnaware>
 	<Title>NewOutlookPatcher</Title>
-	<AssemblyVersion>2026.09.26.04</AssemblyVersion>
-	<FileVersion>2026.09.26.04</FileVersion>
+	<AssemblyVersion>2026.09.26.05</AssemblyVersion>
+	<FileVersion>2026.09.26.05</FileVersion>
 	<PackageProjectUrl>https://github.com/valinet/NewOutlookPatcher</PackageProjectUrl>
 	<Copyright>Copyright 2024 VALINET Solutions. All rights reserved.</Copyright>
 	<Description>Original NewOutlookPatcher architecture with Outlook 2026 Premium/Upsell DirectJS hiding.</Description>
-	<Version>2026.09.26.04</Version>
+	<Version>2026.09.26.05</Version>
 	<PublishSingleFile>true</PublishSingleFile>
 	<PackageId>NewOutlookPatcher</PackageId>
 	<Authors>NewOutlookPatcher</Authors>
