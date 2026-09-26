@@ -1,13 +1,12 @@
-name: Build NewOutlookPatcher NOAB Trace
+name: Build NewOutlookPatcher NOAB v1.1 Integrated
 
 on:
   workflow_dispatch:
   push:
-    paths:
-      - "NOP/**"
-      - "NOP.sln"
-      - "Check-NOAB-Install.ps1"
-      - ".github/workflows/build-patcher.yml"
+    branches:
+      - main
+    tags:
+      - "v1.1*"
 
 permissions:
   contents: read
@@ -19,6 +18,20 @@ jobs:
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
+
+      - name: Guard known-working native worker
+        shell: pwsh
+        run: |
+          $worker = "$env:GITHUB_WORKSPACE\NOP\worker\dllmain.cpp"
+          $expected = "DD470232B5E5BD0212B68B947834D3C910C2594660586BDEA3555DDC905F5F5B"
+          $actual = (Get-FileHash $worker -Algorithm SHA256).Hash
+
+          Write-Host "Expected worker source SHA256: $expected"
+          Write-Host "Actual worker source SHA256:   $actual"
+
+          if ($actual -ne $expected) {
+            throw "The known-working Outlook 1.2026.915.300 worker source changed."
+          }
 
       - name: Setup .NET 8
         uses: actions/setup-dotnet@v4
@@ -63,7 +76,7 @@ jobs:
           Copy-Item "$src\include\MinHook.h" "$root\NOP\worker\MinHook.h" -Force
           Copy-Item $lib.FullName "$root\NOP\worker\libMinHook.x64.lib" -Force
 
-      - name: Build trace worker
+      - name: Build known-working x64 worker
         shell: pwsh
         run: |
           $root = "$env:GITHUB_WORKSPACE"
@@ -80,7 +93,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Worker build failed." }
           if (-not (Test-Path "$out\dxgi.dll")) { throw "dxgi.dll was not created." }
 
-      - name: Verify trace markers
+      - name: Verify working worker markers
         shell: pwsh
         run: |
           $dll = "$env:GITHUB_WORKSPACE\x64\Release\dxgi.dll"
@@ -92,18 +105,35 @@ jobs:
             "MessageAdKeyOutlookUpSell",
             "WebView2 MinHook enabled successfully",
             "CreateCoreWebView2EnvironmentWithOptions intercepted",
-            "ControllerCompleted intercepted",
             "AddScriptToExecuteOnDocumentCreated",
-            "Environment10 exists"
+            "ThunkOldAddress"
           )) {
             if (-not ($unicode.Contains($marker) -or $ascii.Contains($marker))) {
-              throw "Built worker is missing trace marker: $marker"
+              throw "Built worker is missing marker: $marker"
             }
           }
 
-          Write-Host "Trace worker verified."
+      - name: Verify HOSTS safety list
+        shell: pwsh
+        run: |
+          $hostsSource = Get-Content "$env:GITHUB_WORKSPACE\NOP\gui\HostsBlocker.cs" -Raw
 
-      - name: Publish GUI with trace worker embedded
+          foreach ($domain in @(
+            "msft-ssp.adnxs.com",
+            "msft-ssp-fra1.adnxs.com",
+            "eb2.3lift.com",
+            "b1t-dubdc2.outbrain.com"
+          )) {
+            if (-not $hostsSource.Contains($domain)) {
+              throw "HOSTS source is missing expected domain: $domain"
+            }
+          }
+
+          if ($hostsSource.Contains('"outlook.office.com"')) {
+            throw "Safety failure: outlook.office.com must never be in the managed HOSTS block."
+          }
+
+      - name: Publish GUI after worker build
         shell: pwsh
         run: |
           $root = "$env:GITHUB_WORKSPACE"
@@ -119,7 +149,7 @@ jobs:
           $exe = "$root\NOP\gui\bin\Release\net8.0-windows\win-x64\publish\NewOutlookPatcher.exe"
           if (-not (Test-Path $exe)) { throw "NewOutlookPatcher.exe was not created." }
 
-      - name: Prepare artifact
+      - name: Prepare release artifact
         shell: pwsh
         run: |
           $root = "$env:GITHUB_WORKSPACE"
@@ -128,20 +158,23 @@ jobs:
 
           Copy-Item `
             "$root\NOP\gui\bin\Release\net8.0-windows\win-x64\publish\NewOutlookPatcher.exe" `
-            "$dist\NewOutlookPatcher-NOAB-Trace.exe"
+            "$dist\NewOutlookPatcher-NOAB-2026-v1.1.exe"
 
-          Copy-Item "$root\x64\Release\dxgi.dll" "$dist\dxgi.dll"
-          Copy-Item "$root\NOP\worker\dllmain.cpp" "$dist\dllmain.cpp"
+          Copy-Item "$root\x64\Release\dxgi.dll" "$dist\NewOutlookPatcher.dll"
+          Copy-Item "$root\domains.txt" "$dist\domains.txt"
           Copy-Item "$root\Check-NOAB-Install.ps1" "$dist\Check-NOAB-Install.ps1"
+          Copy-Item "$root\RELEASE-NOTES-v1.1.md" "$dist\RELEASE-NOTES-v1.1.md"
+          Copy-Item "$root\LICENSE" "$dist\LICENSE"
+          Copy-Item "$root\THIRD-PARTY-MINHOOK-LICENSE.txt" "$dist\THIRD-PARTY-MINHOOK-LICENSE.txt"
 
           Get-ChildItem $dist -File | ForEach-Object {
             $hash = Get-FileHash $_.FullName -Algorithm SHA256
             "$($hash.Hash)  $($_.Name)"
           } | Set-Content "$dist\SHA256SUMS.txt"
 
-      - name: Upload x64 build
+      - name: Upload v1.1 artifact
         uses: actions/upload-artifact@v4
         with:
-          name: NewOutlookPatcher-NOAB-Trace-x64
+          name: NewOutlookPatcher-NOAB-2026-v1.1-x64
           if-no-files-found: error
           path: dist
