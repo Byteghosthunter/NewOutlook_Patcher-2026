@@ -178,11 +178,26 @@ jobs:
             "$dist\NewOutlookPatcher-NOAB-2026-v1.1.exe"
 
           Copy-Item "$root\x64\Release\dxgi.dll" "$dist\NewOutlookPatcher.dll"
-          Copy-Item "$root\domains.txt" "$dist\domains.txt"
-          Copy-Item "$root\Check-NOAB-Install.ps1" "$dist\Check-NOAB-Install.ps1"
-          Copy-Item "$root\RELEASE-NOTES-v1.1.md" "$dist\RELEASE-NOTES-v1.1.md"
-          Copy-Item "$root\LICENSE" "$dist\LICENSE"
-          Copy-Item "$root\THIRD-PARTY-MINHOOK-LICENSE.txt" "$dist\THIRD-PARTY-MINHOOK-LICENSE.txt"
+
+          # These files are useful for release/debugging, but they are not
+          # required to build or run the patcher. Do not fail the whole build
+          # if the repository was intentionally cleaned up.
+          foreach ($optional in @(
+            "domains.txt",
+            "Check-NOAB-Install.ps1",
+            "RELEASE-NOTES-v1.1.md",
+            "LICENSE",
+            "THIRD-PARTY-MINHOOK-LICENSE.txt"
+          )) {
+            $source = Join-Path $root $optional
+            if (Test-Path -LiteralPath $source) {
+              Copy-Item -LiteralPath $source -Destination (Join-Path $dist $optional)
+              Write-Host "Included optional artifact file: $optional"
+            }
+            else {
+              Write-Host "Optional artifact file not present; skipping: $optional"
+            }
+          }
 
           Get-ChildItem $dist -File | ForEach-Object {
             $hash = Get-FileHash $_.FullName -Algorithm SHA256
