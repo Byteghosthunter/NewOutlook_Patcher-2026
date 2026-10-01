@@ -237,6 +237,9 @@ static void RegisterNoabScript(ICoreWebView2* webview)
         Callback<ICoreWebView2AddScriptToExecuteOnDocumentCreatedCompletedHandler>(
             [](HRESULT errorCode, LPCWSTR id) -> HRESULT
             {
+                R"JS(
+                console.log("NOAB 1.2.2 TEST LOADED");
+                )JS"
                 LogPrintf(
                     L"NOAB: AddScriptToExecuteOnDocumentCreated completed hr=0x%08X id=%s",
                     errorCode,
