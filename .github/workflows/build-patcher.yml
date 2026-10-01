@@ -253,3 +253,4 @@ jobs:
           name: NewOutlookPatcher-NOAB-2026-v1.2.1-x64
           if-no-files-found: error
           path: dist
+
