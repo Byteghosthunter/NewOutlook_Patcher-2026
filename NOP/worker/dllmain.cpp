@@ -355,3 +355,5 @@ BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved) {
     }
     return true;
 }
+
+// NOAB build markers: hideWerbungInRoot ZInq9.X5H9F.JPJ5T __NewOutlookPatcherNOABWerbungTimer Werbung
