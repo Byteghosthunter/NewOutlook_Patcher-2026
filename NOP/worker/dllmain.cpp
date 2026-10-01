@@ -1,4 +1,4 @@
-﻿#include <wrl.h>
+#include <wrl.h>
 #include <wil/com.h>
 #include <Windows.h>
 #include <commctrl.h>
@@ -120,19 +120,37 @@ static const wchar_t* kNoabScript = LR"NOABJS(
         return nodes.length;
     };
 
-    const hideWerbung = () => {
-        const adLabels = [...document.querySelectorAll("div")]
-            .filter((el) => el.textContent.trim() === "Werbung");
+    const hideWerbungInRoot = (root) => {
+        if (!root || !root.querySelectorAll) return 0;
 
-        adLabels.forEach((el) => {
-            const container = el.parentElement;
-            if (container) {
-                container.style.setProperty("display", "none", "important");
+        let hidden = 0;
+
+        // Exact selector confirmed manually in Outlook DevTools. Keep it as a
+        // fast fallback while also using the more resilient text anchor below.
+        root.querySelectorAll("div.ZInq9.X5H9F.JPJ5T").forEach((container) => {
+            container.style.setProperty("display", "none", "important");
+            hidden++;
+        });
+
+        root.querySelectorAll("div").forEach((el) => {
+            if (el.textContent && el.textContent.trim() === "Werbung") {
+                const container = el.parentElement;
+                if (container) {
+                    container.style.setProperty("display", "none", "important");
+                    hidden++;
+                }
             }
         });
 
-        return adLabels.length;
+        // Outlook can place UI parts in open shadow roots. Traverse those too.
+        root.querySelectorAll("*").forEach((el) => {
+            if (el.shadowRoot) hidden += hideWerbungInRoot(el.shadowRoot);
+        });
+
+        return hidden;
     };
+
+    const hideWerbung = () => hideWerbungInRoot(document);
 
     const initialCount = hidePremium();
     hideWerbung();
@@ -149,6 +167,15 @@ static const wchar_t* kNoabScript = LR"NOABJS(
                 { childList: true, subtree: true }
             );
         }
+    }
+
+    // React/Outlook may replace the ad node without a mutation that our
+    // observer can reliably act on in time. Re-apply the rule periodically.
+    if (!window.__NewOutlookPatcherNOABWerbungTimer) {
+        window.__NewOutlookPatcherNOABWerbungTimer = setInterval(() => {
+            hidePremium();
+            hideWerbung();
+        }, 750);
     }
 
     return initialCount;
