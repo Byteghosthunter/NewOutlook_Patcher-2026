@@ -167,7 +167,7 @@ HRESULT STDMETHODCALLTYPE _ICoreWebView2CreateCoreWebView2ControllerCompletedHan
         winrt::check_hresult(webview->add_NavigationCompleted(Microsoft::WRL::Callback<ICoreWebView2NavigationCompletedEventHandler>([](ICoreWebView2* sender, ICoreWebView2NavigationCompletedEventArgs* args) -> HRESULT {
 
             auto script = L"\
- console\.log(\"NOAB 1.2.2 TEST LOADED\");\n
+console.log(\"NOAB 1.2.2 TEST LOADED\");\n\
 ";
             // .root-192, .splitButtonMenuButton-220 { background-color: transparent !important; color: var(--neutralDark) !important; } " /* Deemphasize New mail button */ L"\
 
