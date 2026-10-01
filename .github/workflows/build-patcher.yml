@@ -23,7 +23,7 @@ jobs:
           $bytes = [System.Text.UTF8Encoding]::new($false).GetBytes($text)
           $sha = [System.Security.Cryptography.SHA256]::Create()
           $actual = [BitConverter]::ToString($sha.ComputeHash($bytes)).Replace("-", "")
-          $expected = "A4B7FCDF98674DDCFB57BAC93DA17CD8A419E65D71CEC8AE3984ABBA40E928BA"
+          $expected = "AD8496A7044C7C5048867A547C9416E1E0DB6A5D1F0E1116ECDDB7628737CA45"
 
           Write-Host "Expected normalized worker SHA256: $expected"
           Write-Host "Actual normalized worker SHA256:   $actual"
