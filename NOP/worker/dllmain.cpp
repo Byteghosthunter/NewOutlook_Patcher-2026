@@ -120,11 +120,27 @@ static const wchar_t* kNoabScript = LR"NOABJS(
         return nodes.length;
     };
 
+    const hideWerbung = () => {
+        const adLabels = [...document.querySelectorAll("div")]
+            .filter((el) => el.textContent.trim() === "Werbung");
+
+        adLabels.forEach((el) => {
+            const container = el.parentElement;
+            if (container) {
+                container.style.setProperty("display", "none", "important");
+            }
+        });
+
+        return adLabels.length;
+    };
+
     const initialCount = hidePremium();
+    hideWerbung();
 
     if (!window.__NewOutlookPatcherNOABPremiumObserver) {
         window.__NewOutlookPatcherNOABPremiumObserver = new MutationObserver(() => {
             hidePremium();
+            hideWerbung();
         });
 
         if (document.documentElement) {
