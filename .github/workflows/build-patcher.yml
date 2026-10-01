@@ -1,5 +1,91 @@
-# build-patcher.yml
-# Fixed: builds worker DLL + GUI EXE artifact
+name: Build NOAB WerbungFix v2
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-worker-x64:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Guard test worker source
+        shell: pwsh
+        run: |
+          $worker = "$env:GITHUB_WORKSPACE\NOP\worker\dllmain.cpp"
+          $text = [System.IO.File]::ReadAllText($worker)
+          $text = $text.Replace("`r`n", "`n").Replace("`r", "`n")
+          $bytes = [System.Text.UTF8Encoding]::new($false).GetBytes($text)
+          $sha = [System.Security.Cryptography.SHA256]::Create()
+          $actual = [BitConverter]::ToString($sha.ComputeHash($bytes)).Replace("-", "")
+          $expected = "AEE79D3DF33F9C03B622C1778BED3B2DE5D84EE4F88DCE2306DD398656F7464B"
+
+          Write-Host "Expected normalized worker SHA256: $expected"
+          Write-Host "Actual normalized worker SHA256:   $actual"
+
+          if ($actual -ne $expected) {
+            throw "Test worker source changed."
+          }
+
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Setup NuGet
+        uses: NuGet/setup-nuget@v2
+
+      - name: Restore packages
+        shell: pwsh
+        run: |
+          nuget restore "$env:GITHUB_WORKSPACE\NOP.sln"
+          if ($LASTEXITCODE -ne 0) { throw "NuGet restore failed." }
+
+      - name: Build official MinHook 1.3.4 x64 static
+        shell: pwsh
+        run: |
+          $root = "$env:GITHUB_WORKSPACE"
+          $src = "$root\_minhook-src"
+          $build = "$root\_minhook-build"
+
+          git clone --depth 1 --branch v1.3.4 https://github.com/TsudaKageyu/minhook.git $src
+          if ($LASTEXITCODE -ne 0) { throw "MinHook clone failed." }
+
+          cmake -S $src -B $build -A x64 -DBUILD_SHARED_LIBS=OFF
+          if ($LASTEXITCODE -ne 0) { throw "MinHook configure failed." }
+
+          cmake --build $build --config Release --parallel
+          if ($LASTEXITCODE -ne 0) { throw "MinHook build failed." }
+
+          $lib = Get-ChildItem $build -Recurse -File |
+            Where-Object { $_.Name -ieq "minhook.x64.lib" -or $_.Name -ieq "libMinHook.x64.lib" } |
+            Select-Object -First 1
+
+          if (-not $lib) { throw "MinHook x64 static library was not found." }
+
+          Copy-Item "$src\include\MinHook.h" "$root\NOP\worker\MinHook.h" -Force
+          Copy-Item $lib.FullName "$root\NOP\worker\libMinHook.x64.lib" -Force
+
+      - name: Build x64 worker DLL
+        shell: pwsh
+        run: |
+          $root = "$env:GITHUB_WORKSPACE"
+          $out = "$root\x64\Release\"
+
+          New-Item -ItemType Directory -Path $out -Force | Out-Null
+
+          msbuild "$root\NOP\worker\worker.vcxproj" `
+            /m `
+            /p:Configuration=Release `
+            /p:Platform=x64 `
+            "/p:SolutionDir=$root\" `
+            "/p:OutDir=$out"
+
+          if ($LASTEXITCODE -ne 0) { throw "Worker build failed." }
+          if (-not (Test-Path "$out\dxgi.dll")) { throw "dxgi.dll was not created." }
 
       - name: Verify WerbungFix v2 markers
         shell: pwsh
@@ -37,7 +123,7 @@
             throw "GUI publish failed."
           }
 
-      - name: Prepare final patcher artifact
+      - name: Prepare final artifact
         shell: pwsh
         run: |
           $root = "$env:GITHUB_WORKSPACE"
@@ -45,19 +131,12 @@
 
           New-Item -ItemType Directory -Path $dist -Force | Out-Null
 
-          Copy-Item `
-            "$root\NOP\gui\bin\Release\net8.0-windows\win-x64\publish\NewOutlookPatcher.exe" `
-            "$dist\NewOutlookPatcher.exe"
-
-          Copy-Item `
-            "$root\x64\Release\dxgi.dll" `
-            "$dist\dxgi.dll"
+          Copy-Item "$root\NOP\gui\bin\Release\net8.0-windows\win-x64\publish\NewOutlookPatcher.exe" "$dist\NewOutlookPatcher.exe"
+          Copy-Item "$root\x64\Release\dxgi.dll" "$dist\dxgi.dll"
 
           Get-FileHash "$dist\dxgi.dll" -Algorithm SHA256 |
             ForEach-Object { "$($_.Hash)  dxgi.dll" } |
             Set-Content "$dist\SHA256SUMS.txt"
-
-          Get-ChildItem $dist
 
       - name: Upload final patcher
         uses: actions/upload-artifact@v4
