@@ -1,342 +1,597 @@
 #include <wrl.h>
 #include <wil/com.h>
-#include <winrt/Windows.Foundation.Collections.h>
-#include <winrt/Windows.Web.Syndication.h>
-#include <iostream>
 #include <Windows.h>
 #include <commctrl.h>
+#include <cstdarg>
+#include <string>
 #include "WebView2.h"
 #include "WebView2EnvironmentOptions.h"
+#include "MinHook.h"
 
-#pragma region "IAT patching routine"
-// https://blog.neteril.org/blog/2016/12/23/diverting-functions-windows-iat-patching/
-inline bool VnPatchIAT(HMODULE hMod, const char* libName, const char* funcName, uintptr_t hookAddr) {
-    // Increment module reference count to prevent other threads from unloading it while we're working with it
-    HMODULE module;
-    if (!::GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, (LPCWSTR)hMod, &module)) return false;
+#pragma comment(lib, "libMinHook.x64.lib")
 
-    // Get a reference to the import table to locate the kernel32 entry
-    PIMAGE_DOS_HEADER dos = (PIMAGE_DOS_HEADER)module;
-    PIMAGE_NT_HEADERS nt = (PIMAGE_NT_HEADERS)((uintptr_t)module + dos->e_lfanew);
-    PIMAGE_IMPORT_DESCRIPTOR importDescriptor = (PIMAGE_IMPORT_DESCRIPTOR)((uintptr_t)module +
-        nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress);
+using Microsoft::WRL::Callback;
+using Microsoft::WRL::ComPtr;
 
-    // In the import table find the entry that corresponds to kernel32
-    bool found = false;
-    while (importDescriptor->Characteristics && importDescriptor->Name) {
-        PSTR importName = (PSTR)((PBYTE)module + importDescriptor->Name);
-        if (::_stricmp(importName, libName) == 0) { found = true; break; }
-        importDescriptor++;
-    }
-    if (!found) { ::FreeLibrary(module); return false; }
+static volatile LONG g_webViewHookState = 0; // 0=not installed, 1=installing, 2=installed
 
-    // From the kernel32 import descriptor, go over its IAT thunks to
-    // find the one used by the rest of the code to call GetProcAddress
-    PIMAGE_THUNK_DATA oldthunk = (PIMAGE_THUNK_DATA)((PBYTE)module + importDescriptor->OriginalFirstThunk);
-    PIMAGE_THUNK_DATA thunk = (PIMAGE_THUNK_DATA)((PBYTE)module + importDescriptor->FirstThunk);
-    while (thunk->u1.Function) {
-        PROC* funcStorage = (PROC*)&thunk->u1.Function;
+static std::wstring GetLogPath()
+{
+    wchar_t localAppData[32768] = {};
+    DWORD n = GetEnvironmentVariableW(L"LOCALAPPDATA", localAppData, ARRAYSIZE(localAppData));
+    if (n == 0 || n >= ARRAYSIZE(localAppData))
+        return L"";
 
-        bool bFound = false;
-        if (oldthunk->u1.Ordinal & IMAGE_ORDINAL_FLAG) {
-            bFound = (!(*((WORD*)&(funcName)+1)) && IMAGE_ORDINAL32(oldthunk->u1.Ordinal) == (DWORD_PTR)funcName);
-        }
-        else {
-            PIMAGE_IMPORT_BY_NAME byName = (PIMAGE_IMPORT_BY_NAME)((uintptr_t)module + oldthunk->u1.AddressOfData);
-            bFound = ((*((WORD*)&(funcName)+1)) && !::_stricmp((char*)byName->Name, funcName));
-        }
-
-        // Found it, now let's patch it
-        if (bFound) {
-            // Get the memory page where the info is stored
-            MEMORY_BASIC_INFORMATION mbi;
-            ::VirtualQuery(funcStorage, &mbi, sizeof(MEMORY_BASIC_INFORMATION));
-
-            // Try to change the page to be writable if it's not already
-            if (!::VirtualProtect(mbi.BaseAddress, mbi.RegionSize, PAGE_READWRITE, &mbi.Protect)) {
-                ::FreeLibrary(module);
-                return false;
-            }
-
-            // Store our hook
-            *funcStorage = (PROC)hookAddr;
-
-            // Restore the old flag on the page
-            DWORD dwOldProtect;
-            ::VirtualProtect(mbi.BaseAddress, mbi.RegionSize, mbi.Protect, &dwOldProtect);
-
-            // Profit
-            ::FreeLibrary(module);
-            return true;
-        }
-
-        thunk++;
-        oldthunk++;
-    }
-
-    ::FreeLibrary(module);
-    return false;
+    std::wstring dir = std::wstring(localAppData) + L"\\NewOutlookAdBlocker";
+    CreateDirectoryW(dir.c_str(), nullptr);
+    return dir + L"\\NewOutlookPatcher-NOAB.log";
 }
 
-inline BOOL VnPatchDelayIAT(HMODULE hMod, const char* libName, const char* funcName, uintptr_t hookAddr) {
-    // Increment module reference count to prevent other threads from unloading it while we're working with it
-    HMODULE lib;
-    if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, (LPCWSTR)hMod, &lib)) return FALSE;
+static void LogPrintf(LPCWSTR fmt, ...)
+{
+    static thread_local bool insideLogger = false;
+    if (insideLogger)
+        return;
 
-    PIMAGE_DOS_HEADER dos = (PIMAGE_DOS_HEADER)lib;
-    PIMAGE_NT_HEADERS nt = (PIMAGE_NT_HEADERS)((uintptr_t)lib + dos->e_lfanew);
-    PIMAGE_DELAYLOAD_DESCRIPTOR dload = (PIMAGE_DELAYLOAD_DESCRIPTOR)((uintptr_t)lib +
-        nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_DELAY_IMPORT].VirtualAddress);
-    while (dload->DllNameRVA)
+    insideLogger = true;
+
+    wchar_t message[2048] = {};
+    va_list args;
+    va_start(args, fmt);
+    _vsnwprintf_s(message, ARRAYSIZE(message), _TRUNCATE, fmt, args);
+    va_end(args);
+
+    OutputDebugStringW(message);
+    OutputDebugStringW(L"\r\n");
+
+    std::wstring logPath = GetLogPath();
+    if (!logPath.empty())
     {
-        char* dll = (char*)((uintptr_t)lib + dload->DllNameRVA);
-        if (!_stricmp(dll, libName)) {
-#ifdef _LIBVALINET_DEBUG_HOOKING_IATPATCH
-            printf("[PatchDelayIAT] Found %s in IAT.\n", libName);
-#endif
+        HANDLE h = CreateFileW(
+            logPath.c_str(),
+            FILE_APPEND_DATA,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            nullptr,
+            OPEN_ALWAYS,
+            FILE_ATTRIBUTE_NORMAL,
+            nullptr
+        );
 
-            PIMAGE_THUNK_DATA firstthunk = (PIMAGE_THUNK_DATA)((uintptr_t)lib + dload->ImportNameTableRVA);
-            PIMAGE_THUNK_DATA functhunk = (PIMAGE_THUNK_DATA)((uintptr_t)lib + dload->ImportAddressTableRVA);
-            while (firstthunk->u1.AddressOfData)
+        if (h != INVALID_HANDLE_VALUE)
+        {
+            SYSTEMTIME st{};
+            GetLocalTime(&st);
+
+            wchar_t line[2300] = {};
+            _snwprintf_s(
+                line,
+                ARRAYSIZE(line),
+                _TRUNCATE,
+                L"[%04u-%02u-%02u %02u:%02u:%02u.%03u] [PID %lu TID %lu] %s\r\n",
+                st.wYear, st.wMonth, st.wDay,
+                st.wHour, st.wMinute, st.wSecond, st.wMilliseconds,
+                GetCurrentProcessId(), GetCurrentThreadId(),
+                message
+            );
+
+            DWORD bytes = 0;
+            WriteFile(h, line, static_cast<DWORD>(wcslen(line) * sizeof(wchar_t)), &bytes, nullptr);
+            CloseHandle(h);
+        }
+    }
+
+    insideLogger = false;
+}
+
+static const wchar_t* kNoabScript = LR"NOABJS(
+(() => {
+    console.log("NOAB 1.2.2 WerbungFix loaded");
+    const premiumSelector = "[data-message-ad-id^='MessageAdKeyOutlookUpSell']";
+
+    const styleId = "NewOutlookPatcherNOABStyle";
+    let styleElement = document.getElementById(styleId);
+    if (!styleElement) {
+        styleElement = document.createElement("style");
+        styleElement.id = styleId;
+        (document.head || document.documentElement).appendChild(styleElement);
+    }
+
+    styleElement.textContent = `
+#OwaContainer,
+#OwaContainerSlot1,
+.kk1xx._Bfyd.iIsOF.IjQyD,
+.kk1xx.lHRXq.IjQyD,
+.syTot,
+[id='34318026-c018-414b-abb3-3e32dfb9cc4c'],
+[id='c5251a9b-a95d-4595-91ee-a39e6eed3db2'],
+[id='48cb9ead-1c19-4e1f-8ed9-3d60a7e52b18'],
+[id='59391057-d7d7-49fd-a041-d8e4080f05ec'],
+[id='39109bd4-9389-4731-b8d6-7cc1a128d0b3'],
+.___1fkhojs.f22iagw.f122n59.f1vx9l62.f1c21dwh.fqerorx.f1i5mqs4,
+[id='D64D0004-2A11-442B-9586-F49009D4852B'],
+[data-message-ad-id^='MessageAdKeyOutlookUpSell'] {
+    display: none !important;
+}`;
+
+    const hidePremium = () => {
+        const nodes = document.querySelectorAll(premiumSelector);
+        nodes.forEach((el) => {
+            el.style.setProperty("display", "none", "important");
+        });
+        return nodes.length;
+    };
+
+    const hideWerbungInRoot = (root) => {
+        if (!root || !root.querySelectorAll) return 0;
+
+        let hidden = 0;
+
+        // Exact selector confirmed manually in Outlook DevTools. Keep it as a
+        // fast fallback while also using the more resilient text anchor below.
+        root.querySelectorAll("div.ZInq9.X5H9F.JPJ5T").forEach((container) => {
+            container.style.setProperty("display", "none", "important");
+            hidden++;
+        });
+
+        root.querySelectorAll("div").forEach((el) => {
+            if (el.textContent && el.textContent.trim() === "Werbung") {
+                const container = el.parentElement;
+                if (container) {
+                    container.style.setProperty("display", "none", "important");
+                    hidden++;
+                }
+            }
+        });
+
+        // Outlook can place UI parts in open shadow roots. Traverse those too.
+        root.querySelectorAll("*").forEach((el) => {
+            if (el.shadowRoot) hidden += hideWerbungInRoot(el.shadowRoot);
+        });
+
+        return hidden;
+    };
+
+    const hideWerbung = () => hideWerbungInRoot(document);
+
+    const initialCount = hidePremium();
+    hideWerbung();
+
+    if (!window.__NewOutlookPatcherNOABPremiumObserver) {
+        window.__NewOutlookPatcherNOABPremiumObserver = new MutationObserver(() => {
+            hidePremium();
+            hideWerbung();
+        });
+
+        if (document.documentElement) {
+            window.__NewOutlookPatcherNOABPremiumObserver.observe(
+                document.documentElement,
+                { childList: true, subtree: true }
+            );
+        }
+    }
+
+    // React/Outlook may replace the ad node without a mutation that our
+    // observer can reliably act on in time. Re-apply the rule periodically.
+    if (!window.__NewOutlookPatcherNOABWerbungTimer) {
+        window.__NewOutlookPatcherNOABWerbungTimer = setInterval(() => {
+            hidePremium();
+            hideWerbung();
+        }, 750);
+    }
+
+    return initialCount;
+})()
+)NOABJS";
+
+static void LogWebViewSource(ICoreWebView2* webview, LPCWSTR stage)
+{
+    if (!webview)
+        return;
+
+    LPWSTR source = nullptr;
+    HRESULT hr = webview->get_Source(&source);
+    if (SUCCEEDED(hr) && source)
+    {
+        LogPrintf(L"NOAB: %s source=%s", stage, source);
+        CoTaskMemFree(source);
+    }
+    else
+    {
+        LogPrintf(L"NOAB: %s get_Source failed hr=0x%08X", stage, hr);
+    }
+}
+
+static void ExecuteNoabScript(ICoreWebView2* webview, LPCWSTR reason)
+{
+    if (!webview)
+        return;
+
+    LogWebViewSource(webview, reason);
+
+    HRESULT hr = webview->ExecuteScript(
+        kNoabScript,
+        Callback<ICoreWebView2ExecuteScriptCompletedHandler>(
+            [reason](HRESULT errorCode, LPCWSTR resultObjectAsJson) -> HRESULT
             {
-                if (firstthunk->u1.Ordinal & IMAGE_ORDINAL_FLAG)
-                {
-                    if (!(*((WORD*)&(funcName)+1)) && IMAGE_ORDINAL32(firstthunk->u1.Ordinal) == (DWORD_PTR)funcName)
-                    {
-                        DWORD oldProtect;
-                        if (VirtualProtect(&functhunk->u1.Function, sizeof(uintptr_t), PAGE_EXECUTE_READWRITE, &oldProtect))
+                LogPrintf(
+                    L"NOAB: ExecuteScript(%s) completed hr=0x%08X result=%s",
+                    reason,
+                    errorCode,
+                    resultObjectAsJson ? resultObjectAsJson : L"(null)"
+                );
+                return S_OK;
+            }
+        ).Get()
+    );
+
+    LogPrintf(L"NOAB: ExecuteScript(%s) submitted hr=0x%08X", reason, hr);
+}
+
+static void RegisterNoabScript(ICoreWebView2* webview)
+{
+    if (!webview)
+        return;
+
+    HRESULT hr = webview->AddScriptToExecuteOnDocumentCreated(
+        kNoabScript,
+        Callback<ICoreWebView2AddScriptToExecuteOnDocumentCreatedCompletedHandler>(
+            [](HRESULT errorCode, LPCWSTR id) -> HRESULT
+            {
+                LogPrintf(
+                    L"NOAB: AddScriptToExecuteOnDocumentCreated completed hr=0x%08X id=%s",
+                    errorCode,
+                    id ? id : L"(null)"
+                );
+                return S_OK;
+            }
+        ).Get()
+    );
+
+    LogPrintf(L"NOAB: AddScriptToExecuteOnDocumentCreated submitted hr=0x%08X", hr);
+
+    // Also run once immediately for an already-created document.
+    ExecuteNoabScript(webview, L"ControllerCompleted/immediate");
+
+    EventRegistrationToken navigationToken{};
+    hr = webview->add_NavigationCompleted(
+        Callback<ICoreWebView2NavigationCompletedEventHandler>(
+            [](ICoreWebView2* sender, ICoreWebView2NavigationCompletedEventArgs* args) -> HRESULT
+            {
+                BOOL success = FALSE;
+                HRESULT navHr = args ? args->get_IsSuccess(&success) : E_POINTER;
+                LogPrintf(
+                    L"NOAB: NavigationCompleted event navHr=0x%08X success=%d",
+                    navHr,
+                    success ? 1 : 0
+                );
+                ExecuteNoabScript(sender, L"NavigationCompleted");
+                return S_OK;
+            }
+        ).Get(),
+        &navigationToken
+    );
+
+    LogPrintf(L"NOAB: add_NavigationCompleted hr=0x%08X", hr);
+}
+
+template <typename T>
+static bool PatchVtableEntry(
+    void** vtable,
+    size_t index,
+    void* detour,
+    T* original,
+    LPCWSTR name)
+{
+    if (!vtable || !original)
+        return false;
+
+    if (vtable[index] == detour)
+    {
+        LogPrintf(L"NOAB: %s already patched", name);
+        return true;
+    }
+
+    DWORD oldProtect = 0;
+    if (!VirtualProtect(&vtable[index], sizeof(void*), PAGE_EXECUTE_READWRITE, &oldProtect))
+    {
+        LogPrintf(L"NOAB: VirtualProtect failed for %s error=%lu", name, GetLastError());
+        return false;
+    }
+
+    *original = reinterpret_cast<T>(vtable[index]);
+    vtable[index] = detour;
+
+    DWORD ignored = 0;
+    VirtualProtect(&vtable[index], sizeof(void*), oldProtect, &ignored);
+    FlushInstructionCache(GetCurrentProcess(), &vtable[index], sizeof(void*));
+
+    LogPrintf(L"NOAB: patched %s original=%p detour=%p", name, reinterpret_cast<void*>(*original), detour);
+    return true;
+}
+
+HRESULT(*g_originalControllerCompletedInvoke)(
+    ICoreWebView2CreateCoreWebView2ControllerCompletedHandler*,
+    HRESULT,
+    ICoreWebView2Controller*) = nullptr;
+
+HRESULT STDMETHODCALLTYPE HookControllerCompletedInvoke(
+    ICoreWebView2CreateCoreWebView2ControllerCompletedHandler* self,
+    HRESULT errorCode,
+    ICoreWebView2Controller* createdController)
+{
+    LogPrintf(
+        L"NOAB: ControllerCompleted intercepted hr=0x%08X controller=%p",
+        errorCode,
+        createdController
+    );
+
+    if (createdController)
+    {
+        ComPtr<ICoreWebView2> webview;
+        HRESULT hr = createdController->get_CoreWebView2(webview.GetAddressOf());
+        LogPrintf(L"NOAB: get_CoreWebView2 hr=0x%08X webview=%p", hr, webview.Get());
+
+        if (SUCCEEDED(hr) && webview)
+        {
+            RegisterNoabScript(webview.Get());
+
+            const wchar_t* isF12Enabled = L"y_1A36CD25-E20F-4D0D-B1E6-3CC4307E1488";
+            if (isF12Enabled[0] == L'y')
+            {
+                EventRegistrationToken keyToken{};
+                HRESULT keyHr = createdController->add_AcceleratorKeyPressed(
+                    Callback<ICoreWebView2AcceleratorKeyPressedEventHandler>(
+                        [](ICoreWebView2Controller* sender, ICoreWebView2AcceleratorKeyPressedEventArgs* args) -> HRESULT
                         {
-                            functhunk->u1.Function = (uintptr_t)hookAddr;
-                            VirtualProtect(&functhunk->u1.Function, sizeof(uintptr_t), oldProtect, &oldProtect);
-#ifdef _LIBVALINET_DEBUG_HOOKING_IATPATCH
-                            printf("[PatchDelayIAT] Patched 0x%x in %s to 0x%p.\n", funcName, libName, hookAddr);
-#endif
-                            FreeLibrary(lib);
-                            return TRUE;
+                            COREWEBVIEW2_KEY_EVENT_KIND kind{};
+                            if (FAILED(args->get_KeyEventKind(&kind)))
+                                return S_OK;
+
+                            if (kind == COREWEBVIEW2_KEY_EVENT_KIND_KEY_UP)
+                            {
+                                UINT key = 0;
+                                if (SUCCEEDED(args->get_VirtualKey(&key)) && key == VK_F12)
+                                {
+                                    args->put_Handled(TRUE);
+                                    ComPtr<ICoreWebView2> wv;
+                                    if (SUCCEEDED(sender->get_CoreWebView2(wv.GetAddressOf())) && wv)
+                                        wv->OpenDevToolsWindow();
+                                }
+                            }
+                            return S_OK;
                         }
-                        FreeLibrary(lib);
-                        return FALSE;
-                    }
-                }
-                else
-                {
-                    PIMAGE_IMPORT_BY_NAME byName = (PIMAGE_IMPORT_BY_NAME)((uintptr_t)lib + firstthunk->u1.AddressOfData);
-                    if ((*((WORD*)&(funcName)+1)) && !_stricmp((char*)byName->Name, funcName))
-                    {
-                        DWORD oldProtect;
-                        if (VirtualProtect(&functhunk->u1.Function, sizeof(uintptr_t), PAGE_EXECUTE_READWRITE, &oldProtect))
-                        {
-                            functhunk->u1.Function = (uintptr_t)hookAddr;
-                            VirtualProtect(&functhunk->u1.Function, sizeof(uintptr_t), oldProtect, &oldProtect);
-#ifdef _LIBVALINET_DEBUG_HOOKING_IATPATCH
-                            printf("[PatchDelayIAT] Patched %s in %s to 0x%p.\n", funcName, libName, hookAddr);
-#endif
-                            FreeLibrary(lib);
-                            return TRUE;
-                        }
-                        FreeLibrary(lib);
-                        return FALSE;
-                    }
-                }
-                functhunk++;
-                firstthunk++;
+                    ).Get(),
+                    &keyToken
+                );
+                LogPrintf(L"NOAB: add_AcceleratorKeyPressed hr=0x%08X", keyHr);
             }
         }
-        dload++;
-    }
-    FreeLibrary(lib);
-    return FALSE;
-}
-#pragma endregion
-
-#pragma region "Hooks"
-/*
-LRESULT(*__WndProc)(HWND, UINT, WPARAM, LPARAM) = nullptr;
-LRESULT _WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
-    return __WndProc(hWnd, uMsg, wParam, lParam);
-}
-*/
-
-HRESULT(*__ICoreWebView2CreateCoreWebView2ControllerCompletedHandler_Invoke)(ICoreWebView2CreateCoreWebView2ControllerCompletedHandler* _this, HRESULT, ICoreWebView2Controller*) = nullptr;
-HRESULT STDMETHODCALLTYPE _ICoreWebView2CreateCoreWebView2ControllerCompletedHandler_Invoke(ICoreWebView2CreateCoreWebView2ControllerCompletedHandler* _this, HRESULT errorCode, ICoreWebView2Controller* createdController) {
-    if (createdController != nullptr) {
-        winrt::com_ptr<ICoreWebView2> webview;
-        winrt::check_hresult(createdController->get_CoreWebView2(webview.put()));
-
-        EventRegistrationToken tkn_NavigationCompleted;
-        winrt::check_hresult(webview->add_NavigationCompleted(Microsoft::WRL::Callback<ICoreWebView2NavigationCompletedEventHandler>([](ICoreWebView2* sender, ICoreWebView2NavigationCompletedEventArgs* args) -> HRESULT {
-
-            auto script = L"\
-const styleElement = document.createElement('style');\n\
-const cssClass = \"\
-#OwaContainer, "                                                     /* First "email" ad when online */ L"\
-.kk1xx._Bfyd.iIsOF.IjQyD, "                                          /* First "email" ad when offline */ L"\
-.syTot, "                                                            /* Lower left OneDrive subscription banner */ L"\
-[id='34318026-c018-414b-abb3-3e32dfb9cc4c'], "                       /* Word button in sidebar */ L"\
-[id='c5251a9b-a95d-4595-91ee-a39e6eed3db2'], "                       /* Excel button in sidebar */ L"\
-[id='48cb9ead-1c19-4e1f-8ed9-3d60a7e52b18'], "                       /* PowerPoint button in sidebar */ L"\
-[id='59391057-d7d7-49fd-a041-d8e4080f05ec'], "                       /* To Do button in sidebar */ L"\
-[id='39109bd4-9389-4731-b8d6-7cc1a128d0b3'], "                       /* OneDrive button in sidebar */ L"\
-.___1fkhojs.f22iagw.f122n59.f1vx9l62.f1c21dwh.fqerorx.f1i5mqs4, "    /* More apps button in sidebar */ L"\
-[id='D64D0004-2A11-442B-9586-F49009D4852B'] { display: none !important; }\";\n\
-styleElement.appendChild(document.createTextNode(cssClass));\n\
-document.head.appendChild(styleElement);\n\
-\n\
-console.log(\"NOAB 1.2.2 WerbungFix loaded\");\n\
-\n\
-const hideWerbung = () => {\n\
-    document.querySelectorAll(\".ZInq9.X5H9F.JPJ5T,[aria-label='Klicken Sie, um mehr anzuzeigen.'],div\").forEach((el) => {\n\
-        if (el.matches(\".ZInq9.X5H9F.JPJ5T\") || el.matches(\"[aria-label='Klicken Sie, um mehr anzuzeigen.']\") || el.textContent.trim() === \"Werbung\") {\n\
-            el.style.setProperty(\"display\", \"none\", \"important\");\n\
-            if (el.parentElement && el.textContent.trim() === \"Werbung\") {\n\
-                el.parentElement.style.setProperty(\"display\", \"none\", \"important\");\n\
-            }\n\
-        }\n\
-    });\n\
-};\n\
-\n\
-hideWerbung();\n\
-\n\
-const noabObserver = new MutationObserver(() => {\n\
-    hideWerbung();\n\
-});\n\
-\n\
-noabObserver.observe(document.documentElement, { childList: true, subtree: true });\n\
-\n\
-setInterval(hideWerbung, 1000);\";
-            // .root-192, .splitButtonMenuButton-220 { background-color: transparent !important; color: var(--neutralDark) !important; } " /* Deemphasize New mail button */ L"\
-
-            //::MessageBoxW(nullptr, script, L"", 0);
-            sender->ExecuteScript(script, Microsoft::WRL::Callback<ICoreWebView2ExecuteScriptCompletedHandler>([&](HRESULT errorCode, LPCWSTR resultObjectAsJson) -> HRESULT {
-                return S_OK;
-                }).Get());
-
-            return S_OK;
-            }).Get(), &tkn_NavigationCompleted));
-
-        volatile int dummyF12Enabled = 0;
-        const wchar_t* isF12Enabled = L"y_1A36CD25-E20F-4D0D-B1E6-3CC4307E1488";
-        if (isF12Enabled[0 + dummyF12Enabled] == L'y') {
-            EventRegistrationToken tkn_AcceleratorKeyPressed;
-            winrt::check_hresult(createdController->add_AcceleratorKeyPressed(Microsoft::WRL::Callback<ICoreWebView2AcceleratorKeyPressedEventHandler>([](ICoreWebView2Controller* sender, ICoreWebView2AcceleratorKeyPressedEventArgs* args) -> HRESULT {
-
-                COREWEBVIEW2_KEY_EVENT_KIND kind;
-                winrt::check_hresult(args->get_KeyEventKind(&kind));
-                if (kind == COREWEBVIEW2_KEY_EVENT_KIND_KEY_UP) {
-                    UINT key;
-                    winrt::check_hresult(args->get_VirtualKey(&key));
-                    if (key == VK_F12) {
-                        winrt::check_hresult(args->put_Handled(true));
-                        winrt::com_ptr<ICoreWebView2> webview;
-                        winrt::check_hresult(sender->get_CoreWebView2(webview.put()));
-                        webview->OpenDevToolsWindow();
-                    }
-                }
-
-                return S_OK;
-                }).Get(), &tkn_AcceleratorKeyPressed));
-        }
-
-        /*
-        HWND parentWindow = nullptr;
-        createdController->get_ParentWindow(&parentWindow);
-        ::SetLastError(0);
-        __WndProc = reinterpret_cast<LRESULT(*)(HWND, UINT, WPARAM, LPARAM)>(::GetWindowLongPtrW(parentWindow, GWLP_WNDPROC));
-        if (::GetLastError() == ERROR_SUCCESS && __WndProc) {
-            ::SetWindowLongPtrW(parentWindow, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(_WndProc));
-        }
-        */
     }
 
-    //::MessageBoxW(nullptr, L"Hello from _ICoreWebView2CreateCoreWebView2ControllerCompletedHandler_Invoke", L"", 0);
-    return __ICoreWebView2CreateCoreWebView2ControllerCompletedHandler_Invoke(_this, errorCode, createdController);
+    if (g_originalControllerCompletedInvoke)
+        return g_originalControllerCompletedInvoke(self, errorCode, createdController);
+
+    LogPrintf(L"NOAB: original ControllerCompleted callback missing");
+    return S_OK;
 }
 
-HRESULT(*__ICoreWebView2Environment_CreateCoreWebView2Controller)(ICoreWebView2Environment*, HWND, ICoreWebView2CreateCoreWebView2ControllerCompletedHandler*) = nullptr;
-HRESULT STDMETHODCALLTYPE _ICoreWebView2Environment_CreateCoreWebView2Controller(ICoreWebView2Environment* _this, HWND parentWindow, ICoreWebView2CreateCoreWebView2ControllerCompletedHandler* controllerCompletedHandler) {
-    void** controllerCompletedHandlerVtbl = *(void***)controllerCompletedHandler;
-    if (controllerCompletedHandlerVtbl[3] != _ICoreWebView2CreateCoreWebView2ControllerCompletedHandler_Invoke) {
-        //::MessageBoxW(nullptr, L"Patching controllerCompletedHandlerVtbl", L"", 0);
-        DWORD oldProtect = 0;
-        if (::VirtualProtect(&controllerCompletedHandlerVtbl[3], sizeof(uintptr_t), PAGE_EXECUTE_READWRITE, &oldProtect)) {
-            __ICoreWebView2CreateCoreWebView2ControllerCompletedHandler_Invoke = reinterpret_cast<HRESULT(*)(ICoreWebView2CreateCoreWebView2ControllerCompletedHandler*, HRESULT, ICoreWebView2Controller*)>(controllerCompletedHandlerVtbl[3]);
-            controllerCompletedHandlerVtbl[3] = _ICoreWebView2CreateCoreWebView2ControllerCompletedHandler_Invoke;
-            ::VirtualProtect(&controllerCompletedHandlerVtbl[3], sizeof(uintptr_t), oldProtect, &oldProtect);
+HRESULT(*g_originalCreateController)(
+    ICoreWebView2Environment*,
+    HWND,
+    ICoreWebView2CreateCoreWebView2ControllerCompletedHandler*) = nullptr;
+
+HRESULT STDMETHODCALLTYPE HookCreateController(
+    ICoreWebView2Environment* self,
+    HWND parentWindow,
+    ICoreWebView2CreateCoreWebView2ControllerCompletedHandler* controllerCompletedHandler)
+{
+    LogPrintf(
+        L"NOAB: CreateCoreWebView2Controller intercepted env=%p hwnd=%p callback=%p",
+        self,
+        parentWindow,
+        controllerCompletedHandler
+    );
+
+    if (controllerCompletedHandler)
+    {
+        void** callbackVtable = *reinterpret_cast<void***>(controllerCompletedHandler);
+        PatchVtableEntry(
+            callbackVtable,
+            3,
+            reinterpret_cast<void*>(&HookControllerCompletedInvoke),
+            &g_originalControllerCompletedInvoke,
+            L"ControllerCompleted::Invoke"
+        );
+    }
+
+    if (g_originalCreateController)
+        return g_originalCreateController(self, parentWindow, controllerCompletedHandler);
+
+    LogPrintf(L"NOAB: original CreateCoreWebView2Controller missing");
+    return E_FAIL;
+}
+
+HRESULT(*g_originalEnvironmentCompletedInvoke)(
+    ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler*,
+    HRESULT,
+    ICoreWebView2Environment*) = nullptr;
+
+HRESULT STDMETHODCALLTYPE HookEnvironmentCompletedInvoke(
+    ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler* self,
+    HRESULT errorCode,
+    ICoreWebView2Environment* createdEnvironment)
+{
+    LogPrintf(
+        L"NOAB: EnvironmentCompleted intercepted hr=0x%08X env=%p",
+        errorCode,
+        createdEnvironment
+    );
+
+    if (createdEnvironment)
+    {
+        void** envVtable = *reinterpret_cast<void***>(createdEnvironment);
+        PatchVtableEntry(
+            envVtable,
+            3,
+            reinterpret_cast<void*>(&HookCreateController),
+            &g_originalCreateController,
+            L"ICoreWebView2Environment::CreateCoreWebView2Controller"
+        );
+
+        ComPtr<ICoreWebView2Environment3> env3;
+        HRESULT hr3 = createdEnvironment->QueryInterface(IID_PPV_ARGS(env3.GetAddressOf()));
+        LogPrintf(L"NOAB: QueryInterface ICoreWebView2Environment3 hr=0x%08X supported=%d", hr3, SUCCEEDED(hr3) && env3 ? 1 : 0);
+
+        ComPtr<ICoreWebView2Environment10> env10;
+        HRESULT hr10 = createdEnvironment->QueryInterface(IID_PPV_ARGS(env10.GetAddressOf()));
+        LogPrintf(L"NOAB: QueryInterface ICoreWebView2Environment10 hr=0x%08X supported=%d", hr10, SUCCEEDED(hr10) && env10 ? 1 : 0);
+
+        if (SUCCEEDED(hr10) && env10)
+        {
+            LogPrintf(L"NOAB: Environment10 exists; Outlook may use CreateCoreWebView2ControllerWithOptions. This trace build does not patch that method yet.");
         }
     }
 
-    //::MessageBoxW(nullptr, L"Hello from _ICoreWebView2Environment_CreateCoreWebView2Controller", L"", 0);
-    return __ICoreWebView2Environment_CreateCoreWebView2Controller(_this, parentWindow, controllerCompletedHandler);
+    if (g_originalEnvironmentCompletedInvoke)
+        return g_originalEnvironmentCompletedInvoke(self, errorCode, createdEnvironment);
+
+    LogPrintf(L"NOAB: original EnvironmentCompleted callback missing");
+    return S_OK;
 }
 
-HRESULT(*__ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler_Invoke)(ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler* _this, HRESULT, ICoreWebView2Environment*) = nullptr;
-HRESULT STDMETHODCALLTYPE _ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler_Invoke(ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler* _this, HRESULT errorCode, ICoreWebView2Environment* createdEnvironment) {
-    void** createdEnvironmentVtbl = *(void***)createdEnvironment;
-    if (createdEnvironmentVtbl[3] != _ICoreWebView2Environment_CreateCoreWebView2Controller) {
-        //::MessageBoxW(nullptr, L"Patching createdEnvironmentVtbl", L"", 0);
-        DWORD oldProtect = 0;
-        if (::VirtualProtect(&createdEnvironmentVtbl[3], sizeof(uintptr_t), PAGE_EXECUTE_READWRITE, &oldProtect)) {
-            __ICoreWebView2Environment_CreateCoreWebView2Controller = reinterpret_cast<HRESULT(*)(ICoreWebView2Environment*, HWND, ICoreWebView2CreateCoreWebView2ControllerCompletedHandler*)>(createdEnvironmentVtbl[3]);
-            createdEnvironmentVtbl[3] = _ICoreWebView2Environment_CreateCoreWebView2Controller;
-            ::VirtualProtect(&createdEnvironmentVtbl[3], sizeof(uintptr_t), oldProtect, &oldProtect);
-        }
+typedef HRESULT(WINAPI* PFN_CreateCoreWebView2EnvironmentWithOptions)(
+    PCWSTR,
+    PCWSTR,
+    ICoreWebView2EnvironmentOptions*,
+    ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler*
+);
+
+static PFN_CreateCoreWebView2EnvironmentWithOptions g_originalCreateEnvironment = nullptr;
+
+STDAPI HookCreateCoreWebView2EnvironmentWithOptions(
+    PCWSTR browserExecutableFolder,
+    PCWSTR userDataFolder,
+    ICoreWebView2EnvironmentOptions* environmentOptions,
+    ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler* environmentCreatedHandler)
+{
+    LogPrintf(
+        L"NOAB: CreateCoreWebView2EnvironmentWithOptions intercepted browser=%s userdata=%s callback=%p",
+        browserExecutableFolder ? browserExecutableFolder : L"(default)",
+        userDataFolder ? userDataFolder : L"(default)",
+        environmentCreatedHandler
+    );
+
+    if (environmentCreatedHandler)
+    {
+        void** callbackVtable = *reinterpret_cast<void***>(environmentCreatedHandler);
+        PatchVtableEntry(
+            callbackVtable,
+            3,
+            reinterpret_cast<void*>(&HookEnvironmentCompletedInvoke),
+            &g_originalEnvironmentCompletedInvoke,
+            L"EnvironmentCompleted::Invoke"
+        );
     }
 
-    //::MessageBoxW(nullptr, L"Hello from _ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler_Invoke", L"", 0);
-    return __ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler_Invoke(_this, errorCode, createdEnvironment);
+    if (!g_originalCreateEnvironment)
+    {
+        LogPrintf(L"NOAB: original CreateCoreWebView2EnvironmentWithOptions trampoline missing");
+        return E_FAIL;
+    }
+
+    return g_originalCreateEnvironment(
+        browserExecutableFolder,
+        userDataFolder,
+        environmentOptions,
+        environmentCreatedHandler
+    );
 }
 
-HRESULT(*__CreateCoreWebView2EnvironmentWithOptions)(PCWSTR, PCWSTR, ICoreWebView2EnvironmentOptions*, ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler*) = nullptr;
-STDAPI _CreateCoreWebView2EnvironmentWithOptions(PCWSTR browserExecutableFolder, PCWSTR userDataFolder, ICoreWebView2EnvironmentOptions* environmentOptions, ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler* environmentCreatedHandler) {
-    void** environmentCreatedHandlerVtbl = *(void***)environmentCreatedHandler;
-    if (environmentCreatedHandlerVtbl[3] != _ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler_Invoke) {
-        //::MessageBoxW(nullptr, L"Patching environmentCreatedHandlerVtbl", L"", 0);
-        DWORD oldProtect = 0;
-        if (::VirtualProtect(&environmentCreatedHandlerVtbl[3], sizeof(uintptr_t), PAGE_EXECUTE_READWRITE, &oldProtect)) {
-            __ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler_Invoke = reinterpret_cast<HRESULT(*)(ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler*, HRESULT, ICoreWebView2Environment*)>(environmentCreatedHandlerVtbl[3]);
-            environmentCreatedHandlerVtbl[3] = _ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler_Invoke;
-            ::VirtualProtect(&environmentCreatedHandlerVtbl[3], sizeof(uintptr_t), oldProtect, &oldProtect);
-        }
+static void TryInstallWebView2Hook()
+{
+    if (InterlockedCompareExchange(&g_webViewHookState, 1, 0) != 0)
+        return;
+
+    HMODULE loader = GetModuleHandleW(L"WebView2Loader.dll");
+    if (!loader)
+    {
+        InterlockedExchange(&g_webViewHookState, 0);
+        return;
     }
 
-    if (!__CreateCoreWebView2EnvironmentWithOptions) {
-        auto hMod = ::GetModuleHandleW(L"WebView2Loader.dll");
-        winrt::check_bool(hMod);
-        __CreateCoreWebView2EnvironmentWithOptions = reinterpret_cast<HRESULT(*)(PCWSTR, PCWSTR, ICoreWebView2EnvironmentOptions*, ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler*)>(::GetProcAddress(hMod, "CreateCoreWebView2EnvironmentWithOptions"));
-        winrt::check_bool(__CreateCoreWebView2EnvironmentWithOptions);
+    FARPROC target = GetProcAddress(loader, "CreateCoreWebView2EnvironmentWithOptions");
+    if (!target)
+    {
+        LogPrintf(L"NOAB: WebView2Loader.dll present but CreateCoreWebView2EnvironmentWithOptions export not found");
+        InterlockedExchange(&g_webViewHookState, 0);
+        return;
     }
-    //::MessageBoxW(nullptr, L"Hello from _CreateCoreWebView2EnvironmentWithOptions", L"", 0);
-    return __CreateCoreWebView2EnvironmentWithOptions(browserExecutableFolder, userDataFolder, environmentOptions, environmentCreatedHandler);
+
+    LogPrintf(L"NOAB: WebView2Loader detected at %p, target=%p", loader, target);
+
+    MH_STATUS status = MH_Initialize();
+    if (status != MH_OK && status != MH_ERROR_ALREADY_INITIALIZED)
+    {
+        LogPrintf(L"NOAB: MH_Initialize failed status=%d", status);
+        InterlockedExchange(&g_webViewHookState, 0);
+        return;
+    }
+
+    status = MH_CreateHook(
+        reinterpret_cast<LPVOID>(target),
+        reinterpret_cast<LPVOID>(&HookCreateCoreWebView2EnvironmentWithOptions),
+        reinterpret_cast<LPVOID*>(&g_originalCreateEnvironment)
+    );
+
+    if (status != MH_OK && status != MH_ERROR_ALREADY_CREATED)
+    {
+        LogPrintf(L"NOAB: MH_CreateHook failed status=%d", status);
+        InterlockedExchange(&g_webViewHookState, 0);
+        return;
+    }
+
+    status = MH_EnableHook(reinterpret_cast<LPVOID>(target));
+    if (status != MH_OK && status != MH_ERROR_ENABLED)
+    {
+        LogPrintf(L"NOAB: MH_EnableHook failed status=%d", status);
+        InterlockedExchange(&g_webViewHookState, 0);
+        return;
+    }
+
+    InterlockedExchange(&g_webViewHookState, 2);
+    LogPrintf(L"NOAB: WebView2 MinHook enabled successfully");
 }
-#pragma endregion
 
-#pragma region "AppVerifier infrastructure"
+// ---- AppVerifier infrastructure ----
+
 #define DLL_PROCESS_VERIFIER 4
 
 typedef struct _RTL_VERIFIER_THUNK_DESCRIPTOR {
     PCHAR ThunkName;
     PVOID ThunkOldAddress;
     PVOID ThunkNewAddress;
-} RTL_VERIFIER_THUNK_DESCRIPTOR, * PRTL_VERIFIER_THUNK_DESCRIPTOR;
+} RTL_VERIFIER_THUNK_DESCRIPTOR, *PRTL_VERIFIER_THUNK_DESCRIPTOR;
 
 typedef struct _RTL_VERIFIER_DLL_DESCRIPTOR {
     PWCHAR DllName;
     ULONG DllFlags;
     PVOID DllAddress;
     PRTL_VERIFIER_THUNK_DESCRIPTOR DllThunks;
-} RTL_VERIFIER_DLL_DESCRIPTOR, * PRTL_VERIFIER_DLL_DESCRIPTOR;
+} RTL_VERIFIER_DLL_DESCRIPTOR, *PRTL_VERIFIER_DLL_DESCRIPTOR;
 
-typedef void (NTAPI* RTL_VERIFIER_DLL_LOAD_CALLBACK) (
+typedef void (NTAPI* RTL_VERIFIER_DLL_LOAD_CALLBACK)(
     PWSTR DllName,
     PVOID DllBase,
     SIZE_T DllSize,
     PVOID Reserved);
-typedef void (NTAPI* RTL_VERIFIER_DLL_UNLOAD_CALLBACK) (
+
+typedef void (NTAPI* RTL_VERIFIER_DLL_UNLOAD_CALLBACK)(
     PWSTR DllName,
     PVOID DllBase,
     SIZE_T DllSize,
     PVOID Reserved);
-typedef void (NTAPI* RTL_VERIFIER_NTDLLHEAPFREE_CALLBACK) (
+
+typedef void (NTAPI* RTL_VERIFIER_NTDLLHEAPFREE_CALLBACK)(
     PVOID AllocationBase,
     SIZE_T AllocationSize);
 
@@ -345,48 +600,119 @@ typedef struct _RTL_VERIFIER_PROVIDER_DESCRIPTOR {
     PRTL_VERIFIER_DLL_DESCRIPTOR ProviderDlls;
     RTL_VERIFIER_DLL_LOAD_CALLBACK ProviderDllLoadCallback;
     RTL_VERIFIER_DLL_UNLOAD_CALLBACK ProviderDllUnloadCallback;
-
     PWSTR VerifierImage;
     ULONG VerifierFlags;
     ULONG VerifierDebug;
-
     PVOID RtlpGetStackTraceAddress;
     PVOID RtlpDebugPageHeapCreate;
     PVOID RtlpDebugPageHeapDestroy;
-
     RTL_VERIFIER_NTDLLHEAPFREE_CALLBACK ProviderNtdllHeapFreeCallback;
 } RTL_VERIFIER_PROVIDER_DESCRIPTOR;
 
-RTL_VERIFIER_DLL_DESCRIPTOR noHooks{};
-RTL_VERIFIER_PROVIDER_DESCRIPTOR desc = {
-    sizeof(desc),
-    &noHooks,
+HMODULE WINAPI HookLoadLibraryExW(LPCWSTR lpLibFileName, HANDLE hFile, DWORD dwFlags);
+HMODULE WINAPI HookLoadLibraryW(LPCWSTR lpLibFileName);
+
+static RTL_VERIFIER_THUNK_DESCRIPTOR kernelbaseHooks[] =
+{
+    { (PCHAR)"LoadLibraryExW", nullptr, reinterpret_cast<PVOID>(HookLoadLibraryExW) },
+    { (PCHAR)"LoadLibraryW",   nullptr, reinterpret_cast<PVOID>(HookLoadLibraryW) },
+    { nullptr, nullptr, nullptr },
+};
+
+static RTL_VERIFIER_DLL_DESCRIPTOR verifierDlls[] =
+{
+    { (PWCHAR)L"kernelbase.dll", 0, nullptr, kernelbaseHooks },
+    { nullptr, 0, nullptr, nullptr },
+};
+
+static RTL_VERIFIER_PROVIDER_DESCRIPTOR verifierDescriptor =
+{
+    sizeof(verifierDescriptor),
+    verifierDlls,
     [](auto, auto, auto, auto) {},
     [](auto, auto, auto, auto) {},
     nullptr, 0, 0,
     nullptr, nullptr, nullptr,
     [](auto, auto) {},
 };
-#pragma endregion
 
-BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved) {
-    UNREFERENCED_PARAMETER(lpvReserved);
+typedef HMODULE(WINAPI* PFN_LoadLibraryExW)(LPCWSTR, HANDLE, DWORD);
+typedef HMODULE(WINAPI* PFN_LoadLibraryW)(LPCWSTR);
 
-    switch (fdwReason) {
-    case DLL_PROCESS_ATTACH:
-        ::DisableThreadLibraryCalls(hinstDLL);
-        break;
-    case DLL_THREAD_ATTACH:
-        break;
-    case DLL_THREAD_DETACH:
-        break;
-    case DLL_PROCESS_DETACH:
-        break;
+static PFN_LoadLibraryExW GetOriginalLoadLibraryExW()
+{
+    auto fn = reinterpret_cast<PFN_LoadLibraryExW>(kernelbaseHooks[0].ThunkOldAddress);
+    if (!fn)
+    {
+        HMODULE kb = GetModuleHandleW(L"kernelbase.dll");
+        fn = reinterpret_cast<PFN_LoadLibraryExW>(kb ? GetProcAddress(kb, "LoadLibraryExW") : nullptr);
+    }
+    return fn;
+}
+
+static PFN_LoadLibraryW GetOriginalLoadLibraryW()
+{
+    auto fn = reinterpret_cast<PFN_LoadLibraryW>(kernelbaseHooks[1].ThunkOldAddress);
+    if (!fn)
+    {
+        HMODULE kb = GetModuleHandleW(L"kernelbase.dll");
+        fn = reinterpret_cast<PFN_LoadLibraryW>(kb ? GetProcAddress(kb, "LoadLibraryW") : nullptr);
+    }
+    return fn;
+}
+
+HMODULE WINAPI HookLoadLibraryExW(LPCWSTR lpLibFileName, HANDLE hFile, DWORD dwFlags)
+{
+    PFN_LoadLibraryExW original = GetOriginalLoadLibraryExW();
+    if (!original)
+        return nullptr;
+
+    HMODULE result = original(lpLibFileName, hFile, dwFlags);
+
+    if (lpLibFileName &&
+        (wcsstr(lpLibFileName, L"WebView2") || wcsstr(lpLibFileName, L"uxtheme")))
+    {
+        LogPrintf(L"NOAB: LoadLibraryExW(%s) -> %p", lpLibFileName, result);
+    }
+
+    TryInstallWebView2Hook();
+    return result;
+}
+
+HMODULE WINAPI HookLoadLibraryW(LPCWSTR lpLibFileName)
+{
+    PFN_LoadLibraryW original = GetOriginalLoadLibraryW();
+    if (!original)
+        return nullptr;
+
+    HMODULE result = original(lpLibFileName);
+
+    if (lpLibFileName &&
+        (wcsstr(lpLibFileName, L"WebView2") || wcsstr(lpLibFileName, L"uxtheme")))
+    {
+        LogPrintf(L"NOAB: LoadLibraryW(%s) -> %p", lpLibFileName, result);
+    }
+
+    TryInstallWebView2Hook();
+    return result;
+}
+
+BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved)
+{
+    switch (fdwReason)
+    {
     case DLL_PROCESS_VERIFIER:
-        *(PVOID*)lpvReserved = &desc;
-        ::VnPatchIAT(::GetModuleHandleW(nullptr), "WebView2Loader.dll", "CreateCoreWebView2EnvironmentWithOptions", reinterpret_cast<uintptr_t>(_CreateCoreWebView2EnvironmentWithOptions));
-        ::VnPatchDelayIAT(::GetModuleHandleW(nullptr), "WebView2Loader.dll", "CreateCoreWebView2EnvironmentWithOptions", reinterpret_cast<uintptr_t>(_CreateCoreWebView2EnvironmentWithOptions));
+        *reinterpret_cast<PVOID*>(lpvReserved) = &verifierDescriptor;
+        break;
+
+    case DLL_PROCESS_ATTACH:
+        DisableThreadLibraryCalls(hinstDLL);
+        OutputDebugStringW(L"NOAB: worker DLL attached\r\n");
+        break;
+
+    default:
         break;
     }
-    return true;
+
+    return TRUE;
 }
