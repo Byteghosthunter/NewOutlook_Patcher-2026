@@ -182,17 +182,22 @@ const cssClass = \"\
 styleElement.appendChild(document.createTextNode(cssClass));\n\
 document.head.appendChild(styleElement);\n\
 \n\
+console.log(\"NOAB 1.2.2 WerbungFix loaded\");
+\
+
+\
 const hideWerbung = () => {
 \
-    document.querySelectorAll(".ZInq9.X5H9F.JPJ5T, [aria-label='Klicken Sie, um mehr anzuzeigen.'], div").forEach((el) => {
+    document.querySelectorAll(\".ZInq9.X5H9F.JPJ5T, [aria-label='Klicken Sie, um mehr anzuzeigen.'], div\").forEach((el) => {
 \
-        if (el.matches(".ZInq9.X5H9F.JPJ5T") || el.matches("[aria-label='Klicken Sie, um mehr anzuzeigen.']") || el.textContent.trim() === "Werbung") {
+        if (el.matches(\".ZInq9.X5H9F.JPJ5T\") || el.matches(\"[aria-label='Klicken Sie, um mehr anzuzeigen.']\") || el.textContent.trim() === \"Werbung\") {
 \
-            el.style.setProperty("display", "none", "important");
+            el.style.setProperty(\"display\", \"none\", \"important\");
 \
-            if (el.parentElement && el.textContent.trim() === "Werbung") {
+            if (el.parentElement && el.textContent.trim() === \"Werbung\") {
 \
-                el.parentElement.style.setProperty("display", "none", "important");
+                el.parentElement.style.setProperty(\"display\", \"none\", \"important\");
+\
             }
 \
         }
@@ -202,8 +207,6 @@ const hideWerbung = () => {
 };
 \
 
-\
-console.log("NOAB 1.2.2 WerbungFix loaded");
 \
 hideWerbung();
 \
@@ -221,8 +224,7 @@ noabObserver.observe(document.documentElement, { childList: true, subtree: true 
 \
 
 \
-setInterval(hideWerbung, 1000);
-";
+setInterval(hideWerbung, 1000);\";
             // .root-192, .splitButtonMenuButton-220 { background-color: transparent !important; color: var(--neutralDark) !important; } " /* Deemphasize New mail button */ L"\
 
             //::MessageBoxW(nullptr, script, L"", 0);
