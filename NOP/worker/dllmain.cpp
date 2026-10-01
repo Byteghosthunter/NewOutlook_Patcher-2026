@@ -167,7 +167,16 @@ HRESULT STDMETHODCALLTYPE _ICoreWebView2CreateCoreWebView2ControllerCompletedHan
         winrt::check_hresult(webview->add_NavigationCompleted(Microsoft::WRL::Callback<ICoreWebView2NavigationCompletedEventHandler>([](ICoreWebView2* sender, ICoreWebView2NavigationCompletedEventArgs* args) -> HRESULT {
 
             auto script = L"\
-console.log(\"NOAB 1.2.2 TEST LOADED\");\n\
+console.log(\"NOAB WerbungFix loaded\");\n\
+(function(){\n\
+ const hide=function(){\n\
+  document.querySelectorAll('.ZInq9.X5H9F.JPJ5T').forEach(function(e){\n\
+   e.style.setProperty('display','none','important');\n\
+  });\n\
+ };\n\
+ hide();\n\
+ new MutationObserver(hide).observe(document.documentElement,{childList:true,subtree:true});\n\
+})();\n\
 /* hideWerbungInRoot ZInq9.X5H9F.JPJ5T __NewOutlookPatcherNOABWerbungTimer Werbung */\n\
 ";
             // .root-192, .splitButtonMenuButton-220 { background-color: transparent !important; color: var(--neutralDark) !important; } " /* Deemphasize New mail button */ L"\
