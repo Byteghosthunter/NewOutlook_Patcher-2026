@@ -31,7 +31,7 @@ jobs:
           $bytes = [System.Text.UTF8Encoding]::new($false).GetBytes($text)
           $sha = [System.Security.Cryptography.SHA256]::Create()
           $actual = [BitConverter]::ToString($sha.ComputeHash($bytes)).Replace("-", "")
-          $expected = "8AEE9AFB595EEA50887D830753F526EB88D1883B1B1DE1EB6352448AAA5F153F"
+          $expected = "23F00ACAD0E81ACCC8FC72F4516CF33487C874D8EF1D78592B91FF57849EE02A"
 
           Write-Host "Expected normalized worker SHA256: $expected"
           Write-Host "Actual normalized worker SHA256:   $actual"
@@ -99,6 +99,30 @@ jobs:
 
           if ($LASTEXITCODE -ne 0) { throw "Worker build failed." }
           if (-not (Test-Path "$out\dxgi.dll")) { throw "dxgi.dll was not created." }
+
+      - name: Verify WerbungFix in worker
+        shell: pwsh
+        run: |
+          $dll = "$env:GITHUB_WORKSPACE\x64\Release\dxgi.dll"
+
+          if (-not (Test-Path $dll)) {
+            throw "dxgi.dll was not created."
+          }
+
+          $bytes = [System.IO.File]::ReadAllBytes($dll)
+          $ascii = [System.Text.Encoding]::ASCII.GetString($bytes)
+          $unicode = [System.Text.Encoding]::Unicode.GetString($bytes)
+
+          foreach ($marker in @(
+            "hideWerbung",
+            "Werbung"
+          )) {
+            if (-not ($ascii.Contains($marker) -or $unicode.Contains($marker))) {
+              throw "WerbungFix marker missing in dxgi.dll: $marker"
+            }
+          }
+
+          Write-Host "WerbungFix markers found in dxgi.dll."
 
       - name: Verify working worker markers
         shell: pwsh
