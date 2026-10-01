@@ -167,44 +167,7 @@ HRESULT STDMETHODCALLTYPE _ICoreWebView2CreateCoreWebView2ControllerCompletedHan
         winrt::check_hresult(webview->add_NavigationCompleted(Microsoft::WRL::Callback<ICoreWebView2NavigationCompletedEventHandler>([](ICoreWebView2* sender, ICoreWebView2NavigationCompletedEventArgs* args) -> HRESULT {
 
             auto script = L"\
-console.log(\"NOAB 1.2.2 TEST LOADED\");\n\
-const styleElement = document.createElement('style');\n\
-const cssClass = \"\
-#OwaContainer, "                                                     /* First "email" ad when online */ L"\
-.kk1xx._Bfyd.iIsOF.IjQyD, "                                          /* First "email" ad when offline */ L"\
-.syTot, "                                                            /* Lower left OneDrive subscription banner */ L"\
-[id='34318026-c018-414b-abb3-3e32dfb9cc4c'], "                       /* Word button in sidebar */ L"\
-[id='c5251a9b-a95d-4595-91ee-a39e6eed3db2'], "                       /* Excel button in sidebar */ L"\
-[id='48cb9ead-1c19-4e1f-8ed9-3d60a7e52b18'], "                       /* PowerPoint button in sidebar */ L"\
-[id='59391057-d7d7-49fd-a041-d8e4080f05ec'], "                       /* To Do button in sidebar */ L"\
-[id='39109bd4-9389-4731-b8d6-7cc1a128d0b3'], "                       /* OneDrive button in sidebar */ L"\
-.___1fkhojs.f22iagw.f122n59.f1vx9l62.f1c21dwh.fqerorx.f1i5mqs4, "    /* More apps button in sidebar */ L"\
-[id='D64D0004-2A11-442B-9586-F49009D4852B'] { display: none !important; }\";\n\
-styleElement.appendChild(document.createTextNode(cssClass));\n\
-document.head.appendChild(styleElement);\n\
-\n\
-const hideWerbung = () => {\n\
-    document.querySelectorAll("div").forEach((el) => {\n\
-        if (el.textContent.trim() === "Werbung") {\n\
-            const parent = el.parentElement;\n\
-            if (parent) {\n\
-                parent.style.setProperty("display", "none", "important");\n\
-            }\n\
-        }\n\
-    });\n\
-};\n\
-\n\
-hideWerbung();\n\
-\n\
-const noabObserver = new MutationObserver(() => {\n\
-    hideWerbung();\n\
-});\n\
-\n\
-if (document.body) {\n\
-    noabObserver.observe(document.body, { childList: true, subtree: true });\n\
-}\n\
-\n\
-setInterval(hideWerbung, 1000);
+ console\.log(\"NOAB 1.2.2 TEST LOADED\");\n
 ";
             // .root-192, .splitButtonMenuButton-220 { background-color: transparent !important; color: var(--neutralDark) !important; } " /* Deemphasize New mail button */ L"\
 
