@@ -182,48 +182,27 @@ const cssClass = \"\
 styleElement.appendChild(document.createTextNode(cssClass));\n\
 document.head.appendChild(styleElement);\n\
 \n\
-console.log(\"NOAB 1.2.2 WerbungFix loaded\");
-\
-
-\
-const hideWerbung = () => {
-\
-    document.querySelectorAll(\".ZInq9.X5H9F.JPJ5T, [aria-label='Klicken Sie, um mehr anzuzeigen.'], div\").forEach((el) => {
-\
-        if (el.matches(\".ZInq9.X5H9F.JPJ5T\") || el.matches(\"[aria-label='Klicken Sie, um mehr anzuzeigen.']\") || el.textContent.trim() === \"Werbung\") {
-\
-            el.style.setProperty(\"display\", \"none\", \"important\");
-\
-            if (el.parentElement && el.textContent.trim() === \"Werbung\") {
-\
-                el.parentElement.style.setProperty(\"display\", \"none\", \"important\");
-\
-            }
-\
-        }
-\
-    });
-\
-};
-\
-
-\
-hideWerbung();
-\
-
-\
-const noabObserver = new MutationObserver(() => {
-\
-    hideWerbung();
-\
-});
-\
-
-\
-noabObserver.observe(document.documentElement, { childList: true, subtree: true });
-\
-
-\
+console.log(\"NOAB 1.2.2 WerbungFix loaded\");\n\
+\n\
+const hideWerbung = () => {\n\
+    document.querySelectorAll(\".ZInq9.X5H9F.JPJ5T,[aria-label='Klicken Sie, um mehr anzuzeigen.'],div\").forEach((el) => {\n\
+        if (el.matches(\".ZInq9.X5H9F.JPJ5T\") || el.matches(\"[aria-label='Klicken Sie, um mehr anzuzeigen.']\") || el.textContent.trim() === \"Werbung\") {\n\
+            el.style.setProperty(\"display\", \"none\", \"important\");\n\
+            if (el.parentElement && el.textContent.trim() === \"Werbung\") {\n\
+                el.parentElement.style.setProperty(\"display\", \"none\", \"important\");\n\
+            }\n\
+        }\n\
+    });\n\
+};\n\
+\n\
+hideWerbung();\n\
+\n\
+const noabObserver = new MutationObserver(() => {\n\
+    hideWerbung();\n\
+});\n\
+\n\
+noabObserver.observe(document.documentElement, { childList: true, subtree: true });\n\
+\n\
 setInterval(hideWerbung, 1000);\";
             // .root-192, .splitButtonMenuButton-220 { background-color: transparent !important; color: var(--neutralDark) !important; } " /* Deemphasize New mail button */ L"\
 
